@@ -11,3 +11,6 @@ __pycache__/
 .env
 /chrome_profile/
 /output/
+/session.json
+/device_list.json
+/.chromedriver_path
