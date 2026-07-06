@@ -6,13 +6,9 @@ from pathlib import Path
 from urllib.parse import quote
 
 import psutil
+import requests
 from selenium import webdriver
-from selenium.common.exceptions import (
-    NoSuchElementException,
-    StaleElementReferenceException,
-    TimeoutException,
-    WebDriverException,
-)
+from selenium.common.exceptions import NoSuchElementException, TimeoutException, WebDriverException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
@@ -103,14 +99,23 @@ def attempt_login(driver, base_url: str, username: str, password: str) -> bool:
     """
     driver.get(base_url)
     try:
-        password_field = WebDriverWait(driver, LOGIN_WAIT_SECONDS).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "input[type='password']"))
+        # Wait for whichever renders first: a login form (not authenticated)
+        # or any button on the already-authenticated page (e.g. "Load"). Only
+        # waiting on the password field would block for the full timeout on
+        # every already-logged-in launch, since it never appears in that case.
+        WebDriverWait(driver, LOGIN_WAIT_SECONDS).until(
+            lambda d: d.find_elements(By.CSS_SELECTOR, "input[type='password']")
+            or d.find_elements(By.TAG_NAME, "button")
         )
     except TimeoutException:
-        return True  # no login form shown -> session already active
+        return True  # page never rendered anything - nothing we can do, assume session valid
 
-    if not password_field.is_displayed():
-        return True
+    password_fields = [
+        f for f in driver.find_elements(By.CSS_SELECTOR, "input[type='password']") if f.is_displayed()
+    ]
+    if not password_fields:
+        return True  # no login form shown -> session already active
+    password_field = password_fields[0]
 
     username_field = _find_username_field(driver)
     if username_field is None:
@@ -326,116 +331,6 @@ def fetch_device_data(driver, base_url: str, qr_code: str, include_history: bool
     return {"url": url, "text": body_text, "html": html}
 
 
-def _close_modal(modal, driver) -> None:
-    close_buttons = modal.find_elements(By.CSS_SELECTOR, "button.sticky")
-    if close_buttons:
-        close_buttons[0].click()
-    else:
-        driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
-    time.sleep(0.3)
-
-
-def _wait_for_step_buttons(driver, timeout: int = 15) -> None:
-    try:
-        WebDriverWait(driver, timeout).until(
-            lambda d: any(
-                b.is_displayed() and b.text.strip().lower() == "show all completions"
-                for b in d.find_elements(By.TAG_NAME, "button")
-            )
-        )
-    except TimeoutException:
-        pass
-
-
-def _open_step_modal(driver, step_label: str, timeout: int = 10):
-    _wait_for_step_buttons(driver)
-    buttons = [
-        b for b in driver.find_elements(By.TAG_NAME, "button")
-        if b.is_displayed() and b.text.strip().lower() == "show all completions"
-    ]
-    for button in buttons:
-        button.click()
-        try:
-            modal = WebDriverWait(driver, timeout).until(
-                EC.presence_of_element_located((By.ID, "data-modal"))
-            )
-        except TimeoutException:
-            continue
-        headings = modal.find_elements(By.TAG_NAME, "h2")
-        heading = headings[0].text.strip().lower() if headings else ""
-        if heading == step_label.lower():
-            return modal
-        _close_modal(modal, driver)
-    return None
-
-
-def _modal_field(modal, label: str):
-    lines = modal.text.split("\n")
-    for i, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped == label:
-            return lines[i + 1].strip() if i + 1 < len(lines) else None
-        if stripped.startswith(label):
-            rest = stripped[len(label):].strip()
-            if rest:
-                return rest
-    return None
-
-
-def _modal_page_info(modal):
-    pager_divs = [
-        d for d in modal.find_elements(By.TAG_NAME, "div")
-        if re.fullmatch(r"\d+\s*/\s*\d+", d.text.strip())
-    ]
-    if not pager_divs:
-        return None, None, None
-    current, total = (int(n) for n in re.findall(r"\d+", pager_divs[0].text))
-    return current, total, pager_divs[0]
-
-
-def _modal_next_page(pager_div) -> bool:
-    nav_buttons = pager_div.find_element(By.XPATH, "..").find_elements(By.TAG_NAME, "button")
-    if len(nav_buttons) < 2:
-        return False
-    nav_buttons[-1].click()
-    time.sleep(0.15)  # client-side pagination only - the full attempt list is already loaded
-    return True
-
-
-def _reveal_modal_description(driver, modal):
-    show_buttons = [b for b in modal.find_elements(By.TAG_NAME, "button") if b.text.strip().lower() == "show"]
-    if not show_buttons:
-        return None
-    show_buttons[0].click()
-    try:
-        json_modal = WebDriverWait(driver, 5).until(
-            EC.presence_of_element_located((By.ID, "json-modal-bg"))
-        )
-        time.sleep(0.3)
-        close_buttons = [
-            b for b in json_modal.find_elements(By.TAG_NAME, "button")
-            if b.text.strip().lower() == "close"
-        ]
-        if close_buttons:
-            close_buttons[0].click()
-        else:
-            driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
-    except TimeoutException:
-        pass
-    try:
-        WebDriverWait(driver, 5).until(
-            lambda d: not modal.find_elements(By.CSS_SELECTOR, ".animate-spin")
-        )
-    except TimeoutException:
-        pass
-    time.sleep(0.3)
-    moment = _modal_field(modal, "Moment:")
-    description = _modal_field(modal, "Description:")
-    if moment and description:
-        return f"{moment}: {description}"
-    return description or moment
-
-
 def format_utc_to_gmt7(iso_time) -> str:
     if not iso_time:
         return iso_time
@@ -447,72 +342,113 @@ def format_utc_to_gmt7(iso_time) -> str:
     return local.strftime("%Y-%m-%d %H:%M:%S") + " GMT+7"
 
 
+def elapsed_since(iso_time) -> str:
+    """Human-readable elapsed time from an ISO UTC timestamp to now, e.g. '2d 5h 30m'."""
+    if not iso_time:
+        return ""
+    try:
+        parsed = dt.datetime.fromisoformat(iso_time.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    delta = dt.datetime.now(dt.timezone.utc) - parsed
+    total_minutes = max(0, int(delta.total_seconds() // 60))
+    days, remainder = divmod(total_minutes, 24 * 60)
+    hours, minutes = divmod(remainder, 60)
+    return f"{days}d {hours}h {minutes}m"
+
+
+def _api_base_url(base_url: str) -> str:
+    origin = base_url.split("/webaut/")[0]
+    return f"{origin}/core-db/api/v1"
+
+
+def _api_session_from_driver(driver) -> requests.Session:
+    """Build a requests session reusing the browser's auth cookies.
+
+    The site's data endpoints are plain JSON REST APIs behind cookie auth -
+    calling them directly with requests is dramatically faster than driving
+    the React UI (no page render/hydration, no button clicks), matching the
+    speed of looking a device up by hand in a real browser.
+    """
+    session = requests.Session()
+    for cookie in driver.get_cookies():
+        session.cookies.set(cookie["name"], cookie["value"], domain=cookie["domain"])
+    session.headers.update({"Accept": "application/json, text/plain, */*"})
+    return session
+
+
 def check_device_prog_main(driver, base_url: str, qr_code: str) -> dict:
     """Status of the most recent Prog Main attempt for a device.
 
     If the latest attempt failed, walks back through history to find the
     timestamp of the first attempt in the current run of consecutive
     failures - i.e. when this defect first appeared ("import time").
-    """
-    target = quote(f"device:{qr_code}", safe="")
-    url = f"{base_url.rstrip('/')}/?target={target}"
-    _load_device_page(driver, url)
 
-    modal = _open_step_modal(driver, "prog_main")
-    if modal is None:
-        time.sleep(2)  # some steps' buttons can mount slightly later than others
-        modal = _open_step_modal(driver, "prog_main")
-    if modal is None:
+    Calls the site's REST API directly (same one the "Prog Main" panel and
+    its "Show all completions" history use) instead of driving the browser
+    UI, which is both far faster and immune to the page's own hydration
+    quirks.
+    """
+    session = _api_session_from_driver(driver)
+    api_base = _api_base_url(base_url)
+
+    board_name = None
+    try:
+        dev_response = session.get(f"{api_base}/general/dev/{qr_code}/", timeout=15)
+        if dev_response.ok:
+            board_name = dev_response.json().get("board_name")
+    except requests.RequestException:
+        pass
+
+    try:
+        response = session.get(
+            f"{api_base}/prog/dev/",
+            params={"qr": qr_code, "time_ordered": "true", "step_type": "prog_main"},
+            timeout=15,
+        )
+        response.raise_for_status()
+        results = response.json().get("results", [])
+    except requests.RequestException as exc:
+        return {"qr": qr_code, "error": f"Loi goi API: {exc}"}
+
+    if not results:
         return {"qr": qr_code, "error": "Khong tim thay lich su Prog Main cho thiet bi nay."}
 
-    success = _modal_field(modal, "Success:")
-    last_time = _modal_field(modal, "Time:")
-    passed = success == "✅"
+    latest = results[0]
+    last_time = latest.get("time")
+    passed = bool(latest.get("success"))
 
     if passed:
-        _close_modal(modal, driver)
         return {
             "qr": qr_code,
             "passed_last_attempt": True,
             "last_time": last_time,
             "defect_description": None,
             "first_fail_time": None,
+            "board_name": board_name,
         }
 
-    defect_description = _reveal_modal_description(driver, modal)
+    fail_reasons = (latest.get("info") or {}).get("fail_reasons") or []
+    if fail_reasons:
+        moment = fail_reasons[0].get("moment")
+        reason = fail_reasons[0].get("reason")
+        defect_description = f"{moment}: {reason}" if moment and reason else (reason or moment)
+    else:
+        defect_description = None
+
     first_fail_time = last_time
+    for attempt in results[1:]:
+        if attempt.get("success"):
+            break
+        first_fail_time = attempt.get("time")
 
-    while True:
-        # The modal's DOM can be re-rendered by React at any point (e.g. after
-        # revealing the description, or turning a page), which invalidates
-        # any previously-held element references - always re-fetch it fresh.
-        try:
-            modal = driver.find_element(By.ID, "data-modal")
-        except NoSuchElementException:
-            break
-        try:
-            current, total, pager_div = _modal_page_info(modal)
-        except StaleElementReferenceException:
-            continue
-        if current is None or current >= total:
-            break
-        if not _modal_next_page(pager_div):
-            break
-        try:
-            modal = driver.find_element(By.ID, "data-modal")
-        except NoSuchElementException:
-            break
-        if _modal_field(modal, "Success:") == "✅":
-            break
-        first_fail_time = _modal_field(modal, "Time:")
-
-    _close_modal(modal, driver)
     return {
         "qr": qr_code,
         "passed_last_attempt": False,
         "last_time": last_time,
         "defect_description": defect_description,
         "first_fail_time": first_fail_time,
+        "board_name": board_name,
     }
 
 
