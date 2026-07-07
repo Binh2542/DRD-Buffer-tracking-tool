@@ -220,7 +220,7 @@ class WebdbApp:
         ttk.Label(self.login_frame, text="DRD Buffer Tracking", style="Header.TLabel").grid(
             row=0, column=0, columnspan=2, pady=(0, 4), sticky="w"
         )
-        ttk.Label(self.login_frame, text="Dang nhap WebDB", style="Muted.TLabel").grid(
+        ttk.Label(self.login_frame, text="Login to WebDB", style="Muted.TLabel").grid(
             row=1, column=0, columnspan=2, pady=(0, 20), sticky="w"
         )
 
@@ -253,11 +253,11 @@ class WebdbApp:
         password = self.password_entry.get()
         if not username or not password:
             self.login_status_label.config(
-                text="Vui long nhap day du username/password.", foreground=DANGER
+                text="Please enter both username and password.", foreground=DANGER
             )
             return
         self.login_button.config(state="disabled")
-        self.login_status_label.config(text="Dang dang nhap...", foreground=ACCENT)
+        self.login_status_label.config(text="Logging in...", foreground=ACCENT)
         threading.Thread(target=self._do_login, args=(username, password), daemon=True).start()
 
     def _do_login(self, username, password):
@@ -265,7 +265,7 @@ class WebdbApp:
             driver = build_driver(PROFILE_DIR, headless=True)
         except Exception as exc:  # noqa: BLE001 - infra error, not a credentials problem
             self.result_queue.put(
-                ("login_result", False, f"Loi khoi dong trinh duyet: {exc}", None, username, password, False)
+                ("login_result", False, f"Failed to start browser: {exc}", None, username, password, False)
             )
             return
         try:
@@ -273,7 +273,7 @@ class WebdbApp:
         except Exception as exc:  # noqa: BLE001
             driver.quit()
             self.result_queue.put(
-                ("login_result", False, f"Loi khi dang nhap: {exc}", None, username, password, False)
+                ("login_result", False, f"Login error: {exc}", None, username, password, False)
             )
             return
         if ok:
@@ -281,7 +281,7 @@ class WebdbApp:
         else:
             driver.quit()
             self.result_queue.put(
-                ("login_result", False, "Sai username hoac password.", None, username, password, True)
+                ("login_result", False, "Incorrect username or password.", None, username, password, True)
             )
 
     # ---------------- main screen ----------------
@@ -296,36 +296,41 @@ class WebdbApp:
         ttk.Label(header_box, text="DRD Buffer Tracking", style="Header.TLabel").pack(anchor="w")
         user_row = ttk.Frame(header_box)
         user_row.pack(anchor="w")
-        ttk.Label(user_row, text="Dang nhap: ", style="Muted.TLabel").pack(side="left")
+        ttk.Label(user_row, text="Logged in: ", style="Muted.TLabel").pack(side="left")
         ttk.Label(user_row, text=self.username, style="Accent.TLabel").pack(side="left")
         ttk.Button(top, text="Logout", style="Danger.TButton", command=self._on_logout).pack(side="right")
 
         scan_frame = ttk.Frame(self.main_frame)
         scan_frame.pack(fill="x", pady=(0, 10))
-        ttk.Label(scan_frame, text="Quet QR:").pack(side="left")
+        ttk.Label(scan_frame, text="Scan QR:").pack(side="left")
         self.scan_entry = ttk.Entry(scan_frame, width=40)
         self.scan_entry.pack(side="left", padx=8, fill="x", expand=True)
         self.scan_entry.bind("<Return>", self._on_scan_submit)
 
-        self.status_label = ttk.Label(self.main_frame, text="San sang.", style="Muted.TLabel")
+        self.status_label = ttk.Label(self.main_frame, text="Ready.", style="Muted.TLabel")
         self.status_label.pack(fill="x", pady=(0, 8))
 
-        table_frame = ttk.Frame(self.main_frame)
-        table_frame.pack(fill="both", expand=True)
+        content_frame = ttk.Frame(self.main_frame)
+        content_frame.pack(fill="both", expand=True)
 
-        columns = ("check", "id", "board", "import_time", "elapsed", "defect")
+        table_frame = ttk.Frame(content_frame)
+        table_frame.pack(side="left", fill="both", expand=True)
+
+        columns = ("check", "id", "board", "import_time", "elapsed", "attempt", "defect")
         self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=12)
         self.tree.heading("check", text="")
         self.tree.heading("id", text="ID")
         self.tree.heading("board", text="Board", command=lambda: self._sort_by("board"))
         self.tree.heading("import_time", text="Import Time", command=lambda: self._sort_by("import_time"))
         self.tree.heading("elapsed", text="Elapsed", command=lambda: self._sort_by("elapsed"))
+        self.tree.heading("attempt", text="Attempt", command=lambda: self._sort_by("attempt"))
         self.tree.heading("defect", text="Defect", command=lambda: self._sort_by("defect"))
         self.tree.column("check", width=42, minwidth=42, anchor="center", stretch=False)
         self.tree.column("id", width=130, minwidth=110, stretch=False)
         self.tree.column("board", width=220, minwidth=150, stretch=False)
         self.tree.column("import_time", width=190, minwidth=160, anchor="center", stretch=False)
         self.tree.column("elapsed", width=110, minwidth=90, anchor="center", stretch=False)
+        self.tree.column("attempt", width=80, minwidth=70, anchor="center", stretch=False)
         self.tree.column("defect", width=450, minwidth=220, stretch=True)
 
         self.tree.tag_configure("evenrow", background=FIELD_BG)
@@ -338,6 +343,22 @@ class WebdbApp:
         self.tree.bind("<Delete>", self._on_delete_selected)
         self.tree.bind("<Button-1>", self._on_tree_click)
 
+        summary_frame = ttk.Frame(content_frame, padding=(16, 0, 0, 0))
+        summary_frame.pack(side="right", fill="y")
+        ttk.Label(summary_frame, text="Summary", style="Header.TLabel").pack(anchor="w", pady=(0, 8))
+        self.summary_tree = ttk.Treeview(
+            summary_frame, columns=("model", "qty"), show="headings", height=12
+        )
+        self.summary_tree.heading("model", text="Model")
+        self.summary_tree.heading("qty", text="Qty")
+        self.summary_tree.column("model", width=170, anchor="w")
+        self.summary_tree.column("qty", width=60, anchor="center")
+        self.summary_tree.tag_configure("evenrow", background=FIELD_BG)
+        self.summary_tree.tag_configure("oddrow", background=PANEL_BG)
+        self.summary_tree.pack(fill="y")
+        self.summary_total_label = ttk.Label(summary_frame, text="", style="Accent.TLabel")
+        self.summary_total_label.pack(anchor="w", pady=(10, 0))
+
         button_row = ttk.Frame(self.main_frame)
         button_row.pack(fill="x", pady=(12, 0))
         self.refresh_button = ttk.Button(
@@ -348,9 +369,6 @@ class WebdbApp:
             button_row, text="Delete", style="Danger.TButton", command=self._on_delete_selected
         )
         self.delete_button.pack(side="left")
-
-        self.count_label = ttk.Label(self.main_frame, text="", style="Accent.TLabel")
-        self.count_label.pack(pady=(10, 0))
 
         self._refresh_tree()
         self.scan_entry.focus_set()
@@ -369,10 +387,26 @@ class WebdbApp:
                     device.get("board", ""),
                     device["import_time"],
                     elapsed_since(device.get("import_time_iso")),
+                    device.get("attempt_count", ""),
                     device["defect"],
                 ),
             )
-        self.count_label.config(text=f"Tong so PCB: {len(self.devices)}")
+        self._refresh_summary()
+
+    def _refresh_summary(self):
+        for row in self.summary_tree.get_children():
+            self.summary_tree.delete(row)
+        counts: dict[str, int] = {}
+        for device in self.devices:
+            model = device.get("board") or "Unknown"
+            counts[model] = counts.get(model, 0) + 1
+        for i, (model, qty) in enumerate(sorted(counts.items())):
+            self.summary_tree.insert(
+                "", "end",
+                tags=("evenrow" if i % 2 == 0 else "oddrow",),
+                values=(model, qty),
+            )
+        self.summary_total_label.config(text=f"Total PCB: {len(self.devices)}")
 
     def _tick_elapsed(self):
         """Recompute the Elapsed column every minute without a network call."""
@@ -407,6 +441,9 @@ class WebdbApp:
         elif column == "import_time":
             key = lambda d: d.get("import_time_iso") or ""  # noqa: E731
             self.devices.sort(key=key, reverse=self.sort_reverse)
+        elif column == "attempt":
+            key = lambda d: d.get("attempt_count") or 0  # noqa: E731
+            self.devices.sort(key=key, reverse=self.sort_reverse)
         else:
             key = lambda d: (d.get(column) or "").lower()  # noqa: E731
             self.devices.sort(key=key, reverse=self.sort_reverse)
@@ -422,7 +459,7 @@ class WebdbApp:
         if message:
             self.status_label.config(text=message)
         elif not busy:
-            self.status_label.config(text="San sang.")
+            self.status_label.config(text="Ready.")
         if not busy:
             self.scan_entry.focus_set()
 
@@ -433,10 +470,10 @@ class WebdbApp:
         if not qr:
             return
         if any(d["qr"] == qr for d in self.devices):
-            messagebox.showinfo("Thong bao", f"Thiet bi {qr} da co trong danh sach.")
+            messagebox.showinfo("Notice", f"Device {qr} is already in the list.")
             self.scan_entry.focus_set()
             return
-        self._set_busy(True, f"Dang kiem tra {qr}...")
+        self._set_busy(True, f"Checking {qr}...")
         threading.Thread(target=self._do_scan, args=(qr,), daemon=True).start()
 
     def _do_scan(self, qr):
@@ -444,7 +481,7 @@ class WebdbApp:
             with self.lock:
                 result = check_device_prog_main(self.driver, BASE_URL, qr)
         except Exception as exc:  # noqa: BLE001
-            self.result_queue.put(("error", f"Loi khi kiem tra {qr}: {exc}"))
+            self.result_queue.put(("error", f"Error checking {qr}: {exc}"))
             return
         self.result_queue.put(("scan_result", result))
 
@@ -452,13 +489,13 @@ class WebdbApp:
         self._set_busy(False)
         qr = result["qr"]
         if result.get("error"):
-            messagebox.showerror("Loi", f"{qr}: {result['error']}")
+            messagebox.showerror("Error", f"{qr}: {result['error']}")
             return
         if result["passed_last_attempt"]:
             messagebox.showinfo(
-                "Da PASS",
-                f"Thiet bi {qr} da PASS Prog Main o lan gan nhat "
-                f"({format_utc_to_gmt7(result['last_time'])}).\nKhong them vao danh sach.",
+                "Passed",
+                f"Device {qr} PASSED Prog Main on its most recent attempt "
+                f"({format_utc_to_gmt7(result['last_time'])}).\nNot added to the list.",
             )
             return
         device = {
@@ -466,6 +503,7 @@ class WebdbApp:
             "board": result.get("board_name") or "No info",
             "import_time": format_utc_to_gmt7(result["first_fail_time"]),
             "import_time_iso": result["first_fail_time"],
+            "attempt_count": result.get("attempt_count"),
             "defect": result["defect_description"] or "No info",
         }
         self.devices.append(device)
@@ -476,11 +514,11 @@ class WebdbApp:
     def _on_delete_selected(self, _event=None):
         selected_qrs = self.checked_qrs or set(self.tree.selection())
         if not selected_qrs:
-            messagebox.showinfo("Thong bao", "Chua chon thiet bi nao de xoa.")
+            messagebox.showinfo("Notice", "No devices selected to delete.")
             return
         if not messagebox.askyesno(
-            "Xoa thiet bi",
-            f"Xoa {len(selected_qrs)} thiet bi da chon khoi danh sach?\n" + ", ".join(selected_qrs),
+            "Delete devices",
+            f"Delete {len(selected_qrs)} selected device(s) from the list?\n" + ", ".join(selected_qrs),
         ):
             return
         self.devices = [d for d in self.devices if d["qr"] not in selected_qrs]
@@ -491,9 +529,9 @@ class WebdbApp:
     # ---- refresh ----
     def _on_refresh_click(self):
         if not self.devices:
-            messagebox.showinfo("Thong bao", "Danh sach dang trong.")
+            messagebox.showinfo("Notice", "The list is empty.")
             return
-        self._set_busy(True, "Dang kiem tra danh sach...")
+        self._set_busy(True, "Checking the list...")
         threading.Thread(target=self._do_refresh, daemon=True).start()
 
     def _do_refresh(self):
@@ -514,21 +552,21 @@ class WebdbApp:
         self._set_busy(False)
         for qr, last_time in data["passed"]:
             if messagebox.askyesno(
-                "Thiet bi da PASS",
-                f"Thiet bi {qr} da PASS Prog Main o lan gan nhat "
-                f"({format_utc_to_gmt7(last_time)}).\nXoa khoi danh sach?",
+                "Device passed",
+                f"Device {qr} PASSED Prog Main on its most recent attempt "
+                f"({format_utc_to_gmt7(last_time)}).\nRemove it from the list?",
             ):
                 self.devices = [d for d in self.devices if d["qr"] != qr]
                 self.checked_qrs.discard(qr)
         if data["errors"]:
             msg = "\n".join(f"{qr}: {err}" for qr, err in data["errors"])
-            messagebox.showwarning("Mot so thiet bi loi khi kiem tra", msg)
+            messagebox.showwarning("Some devices failed to check", msg)
         self._save_device_list()
         self._refresh_tree()
 
     # ---- logout ----
     def _on_logout(self):
-        if not messagebox.askyesno("Logout", "Ban co chac muon dang xuat?"):
+        if not messagebox.askyesno("Logout", "Are you sure you want to log out?"):
             return
         with self.lock:
             if self.driver:
@@ -585,7 +623,7 @@ class WebdbApp:
                 self.login_frame = None
                 self._build_main_frame()
             else:
-                self.login_status_label.config(text=error or "Dang nhap that bai.", foreground=DANGER)
+                self.login_status_label.config(text=error or "Login failed.", foreground=DANGER)
                 if wrong_credentials:
                     self._clear_session()
         elif kind == "scan_result":
@@ -594,7 +632,7 @@ class WebdbApp:
             self._on_refresh_result(item[1])
         elif kind == "error":
             self._set_busy(False)
-            messagebox.showerror("Loi", item[1])
+            messagebox.showerror("Error", item[1])
 
 
 def _enable_dpi_awareness() -> None:

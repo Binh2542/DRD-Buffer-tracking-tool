@@ -437,10 +437,12 @@ def check_device_prog_main(driver, base_url: str, qr_code: str) -> dict:
         defect_description = None
 
     first_fail_time = last_time
+    attempt_count = 1
     for attempt in results[1:]:
         if attempt.get("success"):
             break
         first_fail_time = attempt.get("time")
+        attempt_count += 1
 
     return {
         "qr": qr_code,
@@ -449,6 +451,7 @@ def check_device_prog_main(driver, base_url: str, qr_code: str) -> dict:
         "defect_description": defect_description,
         "first_fail_time": first_fail_time,
         "board_name": board_name,
+        "attempt_count": attempt_count,
     }
 
 
