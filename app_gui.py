@@ -1,10 +1,15 @@
 import json
+import os
 import queue
 import threading
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
 
+from dotenv import load_dotenv
+
+from firestore_client import add_device, delete_devices, init_firestore, listen_devices
+from sheets_export import export_devices, init_sheet
 from webdb_client import (
     attempt_login,
     build_driver,
@@ -14,10 +19,13 @@ from webdb_client import (
 )
 
 BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
+
 SESSION_FILE = BASE_DIR / "session.json"
-DEVICE_LIST_FILE = BASE_DIR / "device_list.json"
+FIREBASE_KEY_FILE = BASE_DIR / "firebase_key.json"
 PROFILE_DIR = BASE_DIR / "chrome_profile"
 BASE_URL = "https://main.prod.m11g.ajax.systems/webaut/webdb/"
+GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "").strip()
 
 # ---------------- dark / green theme ----------------
 BG = "#14171c"
@@ -165,7 +173,10 @@ class WebdbApp:
 
         self.driver = None
         self.username = None
-        self.devices = self._load_device_list()
+        self.db = None
+        self.sheet = None
+        self.devices_watch = None
+        self.devices: list[dict] = []
         self.result_queue: queue.Queue = queue.Queue()
         self.lock = threading.Lock()
         self.checked_qrs: set[str] = set()
@@ -181,19 +192,6 @@ class WebdbApp:
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ---------------- persistence ----------------
-    def _load_device_list(self):
-        if DEVICE_LIST_FILE.exists():
-            try:
-                return json.loads(DEVICE_LIST_FILE.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                return []
-        return []
-
-    def _save_device_list(self):
-        DEVICE_LIST_FILE.write_text(
-            json.dumps(self.devices, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-
     def _load_session(self):
         if SESSION_FILE.exists():
             try:
@@ -261,28 +259,48 @@ class WebdbApp:
         threading.Thread(target=self._do_login, args=(username, password), daemon=True).start()
 
     def _do_login(self, username, password):
+        def fail(error, wrong_credentials=False):
+            self.result_queue.put((
+                "login_result",
+                {"ok": False, "error": error, "username": username, "password": password,
+                 "wrong_credentials": wrong_credentials},
+            ))
+
         try:
             driver = build_driver(PROFILE_DIR, headless=True)
         except Exception as exc:  # noqa: BLE001 - infra error, not a credentials problem
-            self.result_queue.put(
-                ("login_result", False, f"Failed to start browser: {exc}", None, username, password, False)
-            )
+            fail(f"Failed to start browser: {exc}")
             return
         try:
             ok = attempt_login(driver, BASE_URL, username, password)
         except Exception as exc:  # noqa: BLE001
             driver.quit()
-            self.result_queue.put(
-                ("login_result", False, f"Login error: {exc}", None, username, password, False)
-            )
+            fail(f"Login error: {exc}")
             return
-        if ok:
-            self.result_queue.put(("login_result", True, None, driver, username, password, False))
-        else:
+        if not ok:
             driver.quit()
-            self.result_queue.put(
-                ("login_result", False, "Incorrect username or password.", None, username, password, True)
-            )
+            fail("Incorrect username or password.", wrong_credentials=True)
+            return
+        try:
+            db = init_firestore(FIREBASE_KEY_FILE)
+        except Exception as exc:  # noqa: BLE001
+            driver.quit()
+            fail(f"Failed to connect to the shared database: {exc}")
+            return
+
+        sheet = None
+        sheet_warning = None
+        if GOOGLE_SHEET_ID:
+            try:
+                sheet = init_sheet(FIREBASE_KEY_FILE, GOOGLE_SHEET_ID)
+            except Exception as exc:  # noqa: BLE001 - reporting is best-effort, don't block login
+                sheet_warning = f"Could not connect to the report Google Sheet: {exc}"
+
+        self.result_queue.put((
+            "login_result",
+            {"ok": True, "driver": driver, "db": db, "sheet": sheet, "sheet_warning": sheet_warning,
+             "username": username, "password": password},
+        ))
 
     # ---------------- main screen ----------------
     def _build_main_frame(self):
@@ -432,24 +450,31 @@ class WebdbApp:
     def _sort_by(self, column):
         self.sort_reverse = self.sort_column == column and not self.sort_reverse
         self.sort_column = column
+        self._apply_current_sort()
+        self._refresh_tree()
 
-        if column == "elapsed":
-            # smaller elapsed = more recent import_time, so the sort direction
+    def _apply_current_sort(self):
+        """Re-apply the last-clicked sort column/direction to self.devices.
+
+        Called both from _sort_by (user clicked a header) and whenever a new
+        Firestore snapshot arrives, since the DB's own ordering wouldn't
+        otherwise match whatever sort the user had selected.
+        """
+        column = self.sort_column
+        if column is None:
+            return
+        if column in ("elapsed", "import_time"):
+            key = lambda d: d.get("import_time_iso") or ""  # noqa: E731
+            # smaller elapsed = more recent import_time, so its sort direction
             # is the opposite of a plain sort on the underlying timestamp
-            key = lambda d: d.get("import_time_iso") or ""  # noqa: E731
-            self.devices.sort(key=key, reverse=not self.sort_reverse)
-        elif column == "import_time":
-            key = lambda d: d.get("import_time_iso") or ""  # noqa: E731
-            self.devices.sort(key=key, reverse=self.sort_reverse)
+            reverse = not self.sort_reverse if column == "elapsed" else self.sort_reverse
+            self.devices.sort(key=key, reverse=reverse)
         elif column == "attempt":
             key = lambda d: d.get("attempt_count") or 0  # noqa: E731
             self.devices.sort(key=key, reverse=self.sort_reverse)
         else:
             key = lambda d: (d.get(column) or "").lower()  # noqa: E731
             self.devices.sort(key=key, reverse=self.sort_reverse)
-
-        self._save_device_list()
-        self._refresh_tree()
 
     def _set_busy(self, busy: bool, message: str = ""):
         state = "disabled" if busy else "normal"
@@ -506,9 +531,9 @@ class WebdbApp:
             "attempt_count": result.get("attempt_count"),
             "defect": result["defect_description"] or "No info",
         }
-        self.devices.append(device)
-        self._save_device_list()
-        self._refresh_tree()
+        # The Firestore listener will pick this up and refresh the table for
+        # everyone (including us) - no need to touch self.devices locally.
+        threading.Thread(target=add_device, args=(self.db, device), daemon=True).start()
 
     # ---- manual delete ----
     def _on_delete_selected(self, _event=None):
@@ -521,10 +546,8 @@ class WebdbApp:
             f"Delete {len(selected_qrs)} selected device(s) from the list?\n" + ", ".join(selected_qrs),
         ):
             return
-        self.devices = [d for d in self.devices if d["qr"] not in selected_qrs]
         self.checked_qrs -= selected_qrs
-        self._save_device_list()
-        self._refresh_tree()
+        threading.Thread(target=delete_devices, args=(self.db, list(selected_qrs)), daemon=True).start()
 
     # ---- refresh ----
     def _on_refresh_click(self):
@@ -550,24 +573,32 @@ class WebdbApp:
 
     def _on_refresh_result(self, data):
         self._set_busy(False)
+        to_delete = []
         for qr, last_time in data["passed"]:
             if messagebox.askyesno(
                 "Device passed",
                 f"Device {qr} PASSED Prog Main on its most recent attempt "
                 f"({format_utc_to_gmt7(last_time)}).\nRemove it from the list?",
             ):
-                self.devices = [d for d in self.devices if d["qr"] != qr]
+                to_delete.append(qr)
                 self.checked_qrs.discard(qr)
+        if to_delete:
+            threading.Thread(target=delete_devices, args=(self.db, to_delete), daemon=True).start()
         if data["errors"]:
             msg = "\n".join(f"{qr}: {err}" for qr, err in data["errors"])
             messagebox.showwarning("Some devices failed to check", msg)
-        self._save_device_list()
-        self._refresh_tree()
 
     # ---- logout ----
     def _on_logout(self):
         if not messagebox.askyesno("Logout", "Are you sure you want to log out?"):
             return
+        if self.devices_watch:
+            self.devices_watch.unsubscribe()
+            self.devices_watch = None
+        self.db = None
+        self.sheet = None
+        self.devices = []
+        self.checked_qrs = set()
         with self.lock:
             if self.driver:
                 try:
@@ -593,6 +624,8 @@ class WebdbApp:
         self._build_login_frame()
 
     def _on_close(self):
+        if self.devices_watch:
+            self.devices_watch.unsubscribe()
         with self.lock:
             if self.driver:
                 try:
@@ -613,19 +646,33 @@ class WebdbApp:
     def _handle_result(self, item):
         kind = item[0]
         if kind == "login_result":
-            _, ok, error, driver, username, password, wrong_credentials = item
+            data = item[1]
             self.login_button.config(state="normal")
-            if ok:
-                self.driver = driver
-                self.username = username
-                self._save_session(username, password)
+            if data["ok"]:
+                self.driver = data["driver"]
+                self.db = data["db"]
+                self.sheet = data["sheet"]
+                self.username = data["username"]
+                self._save_session(data["username"], data["password"])
                 self.login_frame.destroy()
                 self.login_frame = None
                 self._build_main_frame()
+                self.devices_watch = listen_devices(self.db, self._on_devices_changed)
+                if data["sheet_warning"]:
+                    messagebox.showwarning("Report sheet", data["sheet_warning"])
             else:
-                self.login_status_label.config(text=error or "Login failed.", foreground=DANGER)
-                if wrong_credentials:
+                self.login_status_label.config(text=data["error"] or "Login failed.", foreground=DANGER)
+                if data["wrong_credentials"]:
                     self._clear_session()
+        elif kind == "devices_snapshot":
+            self.devices = item[1]
+            self.checked_qrs &= {d["qr"] for d in self.devices}
+            self._apply_current_sort()
+            self._refresh_tree()
+            if self.sheet:
+                threading.Thread(
+                    target=export_devices, args=(self.sheet, list(self.devices)), daemon=True
+                ).start()
         elif kind == "scan_result":
             self._on_scan_result(item[1])
         elif kind == "refresh_result":
@@ -633,6 +680,11 @@ class WebdbApp:
         elif kind == "error":
             self._set_busy(False)
             messagebox.showerror("Error", item[1])
+
+    def _on_devices_changed(self, devices):
+        """Called on Firestore's own background thread - just hand off to the
+        main-thread queue, never touch Tkinter widgets from here directly."""
+        self.result_queue.put(("devices_snapshot", devices))
 
 
 def _enable_dpi_awareness() -> None:

@@ -14,3 +14,4 @@ __pycache__/
 /session.json
 /device_list.json
 /.chromedriver_path
+/firebase_key.json
