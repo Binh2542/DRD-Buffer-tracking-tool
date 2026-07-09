@@ -4,6 +4,7 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 
 DEVICES_COLLECTION = "devices"
+COMPLETED_COLLECTION = "completed_devices"
 
 
 def init_firestore(key_path: Path):
@@ -42,3 +43,17 @@ def listen_devices(db, on_change):
         on_change([doc.to_dict() for doc in col_snapshot])
 
     return db.collection(DEVICES_COLLECTION).on_snapshot(_callback)
+
+
+def add_completed_device(db, device: dict) -> None:
+    """Record a device that passed Prog Main and was moved out of the buffer."""
+    db.collection(COMPLETED_COLLECTION).document(device["qr"]).set(device)
+
+
+def listen_completed_devices(db, on_change):
+    """Same as listen_devices, but for the completed_devices collection."""
+
+    def _callback(col_snapshot, _changes, _read_time):
+        on_change([doc.to_dict() for doc in col_snapshot])
+
+    return db.collection(COMPLETED_COLLECTION).on_snapshot(_callback)

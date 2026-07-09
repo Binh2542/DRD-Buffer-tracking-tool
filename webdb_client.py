@@ -377,8 +377,72 @@ def _api_session_from_driver(driver) -> requests.Session:
     return session
 
 
+def _get_last_step_info(
+    session, api_base: str, qr_code: str, step_name: str, dev_id: str = None, entity: str = "dev"
+):
+    """Most recent record for a given step (e.g. 'repair') via the
+    last_steps API - used to attribute who fixed a device and when.
+    This endpoint lives under api/v2, unlike the rest of this module's v1 calls.
+
+    `entity` selects "dev" (Product) or "component" - components have no
+    numeric id exposed by general/component/, so `dev_id` is only ever sent
+    for the "dev" case.
+    """
+    api_base_v2 = api_base.replace("/api/v1", "/api/v2")
+    try:
+        response = session.post(
+            f"{api_base_v2}/last_steps/{entity}/",
+            json={"ids": [dev_id] if dev_id else [], "qrs": [qr_code], "include_reassigned_qr": True},
+            timeout=15,
+        )
+        response.raise_for_status()
+        data = response.json()
+    except requests.RequestException:
+        return None
+    if not data:
+        return None
+    for step in data[0].get("last_steps", []):
+        if step.get("step") == step_name:
+            return {"operator": step.get("operator"), "time": step.get("time")}
+    return None
+
+
+def _lookup_board(session, api_base: str, qr_code: str):
+    """Resolve a QR to its board/model name, region, colour, and which
+    entity type it is.
+
+    The site itself asks "Component or Product?" for a scanned QR since a
+    QR can be either - this tool always resolves to Component first (the
+    QR codes tracked here are almost always PCB components, not finished
+    products), falling back to Product/device only when no component
+    record exists for that QR. Returns (board_name, entity, dev_id, region, color).
+    """
+    try:
+        comp_response = session.get(f"{api_base}/general/component/{qr_code}/", timeout=15)
+        if comp_response.ok:
+            comp_json = comp_response.json()
+            component_version = comp_json.get("component_version")
+            if component_version:
+                return component_version, "component", None, comp_json.get("region"), comp_json.get("color")
+    except requests.RequestException:
+        pass
+
+    try:
+        dev_response = session.get(f"{api_base}/general/dev/{qr_code}/", timeout=15)
+        if dev_response.ok:
+            dev_json = dev_response.json()
+            return (
+                dev_json.get("board_name"), "dev", dev_json.get("dev_id"),
+                dev_json.get("region"), dev_json.get("color"),
+            )
+    except requests.RequestException:
+        pass
+
+    return None, "dev", None, None, None
+
+
 def check_device_prog_main(driver, base_url: str, qr_code: str) -> dict:
-    """Status of the most recent Prog Main attempt for a device.
+    """Status of the most recent Prog Main attempt for a device or component.
 
     If the latest attempt failed, walks back through history to find the
     timestamp of the first attempt in the current run of consecutive
@@ -392,17 +456,11 @@ def check_device_prog_main(driver, base_url: str, qr_code: str) -> dict:
     session = _api_session_from_driver(driver)
     api_base = _api_base_url(base_url)
 
-    board_name = None
-    try:
-        dev_response = session.get(f"{api_base}/general/dev/{qr_code}/", timeout=15)
-        if dev_response.ok:
-            board_name = dev_response.json().get("board_name")
-    except requests.RequestException:
-        pass
+    board_name, entity, dev_id, region, color = _lookup_board(session, api_base, qr_code)
 
     try:
         response = session.get(
-            f"{api_base}/prog/dev/",
+            f"{api_base}/prog/{entity}/",
             params={"qr": qr_code, "time_ordered": "true", "step_type": "prog_main"},
             timeout=15,
         )
@@ -419,6 +477,7 @@ def check_device_prog_main(driver, base_url: str, qr_code: str) -> dict:
     passed = bool(latest.get("success"))
 
     if passed:
+        repair_info = _get_last_step_info(session, api_base, qr_code, "repair", dev_id=dev_id, entity=entity)
         return {
             "qr": qr_code,
             "passed_last_attempt": True,
@@ -426,6 +485,10 @@ def check_device_prog_main(driver, base_url: str, qr_code: str) -> dict:
             "defect_description": None,
             "first_fail_time": None,
             "board_name": board_name,
+            "region": region,
+            "color": color,
+            "debug_operator": (repair_info or {}).get("operator"),
+            "complete_time": (repair_info or {}).get("time") or last_time,
         }
 
     fail_reasons = (latest.get("info") or {}).get("fail_reasons") or []
@@ -451,6 +514,8 @@ def check_device_prog_main(driver, base_url: str, qr_code: str) -> dict:
         "defect_description": defect_description,
         "first_fail_time": first_fail_time,
         "board_name": board_name,
+        "region": region,
+        "color": color,
         "attempt_count": attempt_count,
     }
 
