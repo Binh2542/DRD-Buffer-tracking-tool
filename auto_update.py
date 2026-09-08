@@ -11,19 +11,28 @@ Release/publishing convention this module expects:
 
 Replacing a running executable differs fundamentally by OS, which is why
 this is split into two very different code paths in apply_update_and_restart:
-  - Windows locks an .exe file while it's running, so this process can't
-    overwrite its own file - a small detached batch script has to wait for
-    this process to exit first, then swap the file in and relaunch it.
-  - Linux does NOT lock a running binary's file - the file can be
+  - Windows locks an .exe file's BYTES while it's running, but - somewhat
+    unintuitively - does not stop it being renamed/moved elsewhere; only
+    overwriting or deleting it in place is blocked. So this process can
+    rename its own running exe out of the way and put the new one in its
+    place itself, with no separate helper process needed at all. (An
+    earlier version spawned a detached background script to do this after
+    the process exited, the way most self-updaters are commonly written -
+    found live on a real factory machine that this reliably never ran, an
+    outcome consistent with security software blocking a hidden process
+    silently replacing another program's binary, exactly the shape of
+    thing it exists to catch. Doing the swap in-process before exiting
+    removes that failure mode entirely, and os.startfile for the final
+    relaunch is the same OS call Explorer itself uses for a double-click.)
+  - Linux does NOT lock a running binary's file at all - the file can be
     overwritten in place immediately, and os.execv (replacing this
     process's own image with the new file) restarts straight into the new
     version with no separate helper needed.
 """
 import os
 import shutil
-import subprocess
 import sys
-import tempfile
+import time
 from pathlib import Path
 
 import requests
@@ -102,11 +111,11 @@ def download_asset(url: str, dest_path: Path, on_progress=None) -> None:
 
 def apply_update_and_restart(new_file_path: Path, target_exe_path: Path) -> None:
     """Replaces the currently-running executable with new_file_path and
-    restarts into it. Never returns on success - the process either exits
-    (Windows, handing off to the helper script) or is replaced in place
-    (Linux, via os.execv). Raises on failure before that point (e.g. can't
-    write the helper script) so the caller can show an error instead of
-    silently doing nothing.
+    restarts into it. Never returns on success - the process exits either
+    way (Windows via os._exit after launching the new exe, Linux via
+    os.execv replacing this process's own image). Raises on failure (e.g.
+    every rename/move retry exhausted) so the caller can show an error
+    instead of silently doing nothing.
     """
     if sys.platform == "win32":
         _apply_update_windows(new_file_path, target_exe_path)
@@ -114,83 +123,47 @@ def apply_update_and_restart(new_file_path: Path, target_exe_path: Path) -> None
         _apply_update_linux(new_file_path, target_exe_path)
 
 
+def _retry(fn, attempts=20, delay=0.5):
+    """Retries fn() (a rename/move) up to `attempts` times, `delay` seconds
+    apart, re-raising the last error if it never succeeds. A just-
+    downloaded, unsigned .exe being briefly locked by antivirus/EDR
+    scanning is a realistic transient failure on factory Windows machines -
+    20x/0.5s (10s total) comfortably outlasts that without the operator
+    noticing more than a brief pause."""
+    last_err = None
+    for _ in range(attempts):
+        try:
+            fn()
+            return
+        except OSError as exc:
+            last_err = exc
+            time.sleep(delay)
+    raise last_err
+
+
 def _apply_update_windows(new_file_path: Path, target_exe_path: Path) -> None:
-    """Windows keeps an .exe file locked while it's running, so this
-    process cannot overwrite its own file - a detached helper script has
-    to wait for this process to fully exit first. The old exe is kept as
-    "<name>.exe.bak" (one generation only) rather than deleted, so a
-    corrupt/failed download still leaves a working copy to fall back to
-    by hand."""
+    """Renames the currently-running exe aside, puts the newly-downloaded
+    one in its exact original place (same name AND path, so an existing
+    Start Menu/taskbar pin still resolves correctly), then launches it and
+    exits. The old exe is kept as "<name>.exe.bak" (one generation only)
+    rather than deleted, so a corrupt/failed download still leaves a
+    working copy to fall back to by hand. Raises on failure (e.g. every
+    retry exhausted) rather than silently leaving the operator with
+    nothing - see this module's docstring for why this doesn't need (and
+    deliberately avoids) a separate helper process."""
     backup_path = target_exe_path.with_name(target_exe_path.name + ".bak")
-    log_path = Path(tempfile.gettempdir()) / "drd_accounting_tool_update.log"
-    script_path = Path(tempfile.gettempdir()) / "drd_accounting_tool_update.bat"
-    # The two `move`s below retry (20x, 500ms apart - 10s total) instead of
-    # trying once: found live that an antivirus/EDR agent briefly locking a
-    # just-downloaded, unsigned .exe while it scans it is a real, common
-    # failure mode on factory Windows machines, and a plain `move` gives no
-    # error output under CREATE_NO_WINDOW - it would silently leave the old
-    # exe in place with no indication anything went wrong. On persistent
-    # failure this logs to %TEMP%\drd_accounting_tool_update.log and still
-    # starts whatever ended up at target_exe_path (old build, but a working
-    # one) rather than leaving the operator with nothing to launch.
-    script = f"""@echo off
-:wait
-tasklist /FI "IMAGENAME eq {target_exe_path.name}" 2>NUL | find /I "{target_exe_path.name}" >NUL
-if "%ERRORLEVEL%"=="0" (
-    timeout /t 1 /nobreak > nul
-    goto wait
-)
-if exist "{backup_path}" del /F /Q "{backup_path}"
-set RETRIES=0
-:move_old
-if not exist "{target_exe_path}" goto move_new
-move /Y "{target_exe_path}" "{backup_path}" >NUL 2>&1
-if not exist "{target_exe_path}" goto move_new
-set /a RETRIES+=1
-if %RETRIES% GEQ 20 (
-    echo %DATE% %TIME% - failed to move old exe aside after 20 attempts >> "{log_path}"
-    goto launch
-)
-timeout /t 1 /nobreak > nul
-goto move_old
-:move_new
-set RETRIES=0
-:move_new_retry
-move /Y "{new_file_path}" "{target_exe_path}" >NUL 2>&1
-if exist "{target_exe_path}" goto launch
-set /a RETRIES+=1
-if %RETRIES% GEQ 20 (
-    echo %DATE% %TIME% - failed to move new exe into place after 20 attempts, restoring backup >> "{log_path}"
-    if exist "{backup_path}" move /Y "{backup_path}" "{target_exe_path}" >NUL 2>&1
-    goto launch
-)
-timeout /t 1 /nobreak > nul
-goto move_new_retry
-:launch
-if exist "{target_exe_path}" start "" "{target_exe_path}"
-del "%~f0"
-"""
-    script_path.write_text(script, encoding="utf-8")
-    # A windowed (console=False) PyInstaller build has no valid inherited
-    # stdin/stdout/stderr - found live that spawning the helper without
-    # explicitly redirecting all three here made the whole Popen call
-    # silently fail (or the child die immediately) under
-    # DETACHED_PROCESS: no helper process ever actually ran, the exe was
-    # never swapped, and nothing surfaced an error anywhere since this
-    # runs after the GUI has already committed to exiting. DEVNULL on all
-    # three avoids inheriting whatever (possibly invalid) handles this
-    # frozen process has.
-    subprocess.Popen(
-        ["cmd", "/c", str(script_path)],
-        creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        close_fds=True,
-    )
-    os._exit(0)  # noqa: SLF001 - immediate exit, not a normal Tk shutdown: the helper
-    # script above is already waiting on this process disappearing from
-    # tasklist, so there's nothing left for this process to clean up.
+    if backup_path.exists():
+        try:
+            backup_path.unlink()
+        except OSError:
+            pass
+    if target_exe_path.exists():
+        _retry(lambda: target_exe_path.rename(backup_path))
+    _retry(lambda: shutil.move(str(new_file_path), str(target_exe_path)))
+    os.startfile(str(target_exe_path))  # noqa: S606 - identical to a normal double-click
+    os._exit(0)  # noqa: SLF001 - immediate exit, not a normal Tk shutdown: the
+    # replacement above already fully happened and the new process is
+    # already launched, so there's nothing left for this process to do.
 
 
 def _apply_update_linux(new_file_path: Path, target_exe_path: Path) -> None:
