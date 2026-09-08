@@ -122,7 +122,17 @@ def _apply_update_windows(new_file_path: Path, target_exe_path: Path) -> None:
     corrupt/failed download still leaves a working copy to fall back to
     by hand."""
     backup_path = target_exe_path.with_name(target_exe_path.name + ".bak")
+    log_path = Path(tempfile.gettempdir()) / "drd_accounting_tool_update.log"
     script_path = Path(tempfile.gettempdir()) / "drd_accounting_tool_update.bat"
+    # The two `move`s below retry (20x, 500ms apart - 10s total) instead of
+    # trying once: found live that an antivirus/EDR agent briefly locking a
+    # just-downloaded, unsigned .exe while it scans it is a real, common
+    # failure mode on factory Windows machines, and a plain `move` gives no
+    # error output under CREATE_NO_WINDOW - it would silently leave the old
+    # exe in place with no indication anything went wrong. On persistent
+    # failure this logs to %TEMP%\drd_accounting_tool_update.log and still
+    # starts whatever ended up at target_exe_path (old build, but a working
+    # one) rather than leaving the operator with nothing to launch.
     script = f"""@echo off
 :wait
 tasklist /FI "IMAGENAME eq {target_exe_path.name}" 2>NUL | find /I "{target_exe_path.name}" >NUL
@@ -131,15 +141,52 @@ if "%ERRORLEVEL%"=="0" (
     goto wait
 )
 if exist "{backup_path}" del /F /Q "{backup_path}"
-if exist "{target_exe_path}" move /Y "{target_exe_path}" "{backup_path}"
-move /Y "{new_file_path}" "{target_exe_path}"
-start "" "{target_exe_path}"
+set RETRIES=0
+:move_old
+if not exist "{target_exe_path}" goto move_new
+move /Y "{target_exe_path}" "{backup_path}" >NUL 2>&1
+if not exist "{target_exe_path}" goto move_new
+set /a RETRIES+=1
+if %RETRIES% GEQ 20 (
+    echo %DATE% %TIME% - failed to move old exe aside after 20 attempts >> "{log_path}"
+    goto launch
+)
+timeout /t 1 /nobreak > nul
+goto move_old
+:move_new
+set RETRIES=0
+:move_new_retry
+move /Y "{new_file_path}" "{target_exe_path}" >NUL 2>&1
+if exist "{target_exe_path}" goto launch
+set /a RETRIES+=1
+if %RETRIES% GEQ 20 (
+    echo %DATE% %TIME% - failed to move new exe into place after 20 attempts, restoring backup >> "{log_path}"
+    if exist "{backup_path}" move /Y "{backup_path}" "{target_exe_path}" >NUL 2>&1
+    goto launch
+)
+timeout /t 1 /nobreak > nul
+goto move_new_retry
+:launch
+if exist "{target_exe_path}" start "" "{target_exe_path}"
 del "%~f0"
 """
     script_path.write_text(script, encoding="utf-8")
+    # A windowed (console=False) PyInstaller build has no valid inherited
+    # stdin/stdout/stderr - found live that spawning the helper without
+    # explicitly redirecting all three here made the whole Popen call
+    # silently fail (or the child die immediately) under
+    # DETACHED_PROCESS: no helper process ever actually ran, the exe was
+    # never swapped, and nothing surfaced an error anywhere since this
+    # runs after the GUI has already committed to exiting. DEVNULL on all
+    # three avoids inheriting whatever (possibly invalid) handles this
+    # frozen process has.
     subprocess.Popen(
         ["cmd", "/c", str(script_path)],
         creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
     )
     os._exit(0)  # noqa: SLF001 - immediate exit, not a normal Tk shutdown: the helper
     # script above is already waiting on this process disappearing from
