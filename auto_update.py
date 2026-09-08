@@ -8,18 +8,24 @@ Release/publishing convention this module expects:
     Linux build - e.g. "DRD-Accounting-Tool-windows.exe" and
     "DRD-Accounting-Tool-linux". Only the asset matching the running OS is
     ever downloaded.
-  - EVERY release needs a working asset for BOTH win and linux, even one
-    that only changed on one platform - check_for_update always reads
-    GitHub's own "latest release" (by publish time, not per-OS), so a
-    Windows-only release with no Linux asset makes every Linux machine's
-    check_for_update return None (a newer release exists, but "has no
-    asset for this OS" - see below) even though an OLDER release further
-    back still has a perfectly good, newer-than-what-they-have Linux
-    build. Found live: two Windows-only point releases in a row made
-    Linux machines stop seeing updates entirely, silently, with no error
-    anywhere - simplest fix is to always re-upload the last known-good
-    Linux (or Windows) asset unchanged onto a same-platform-only release
-    rather than ever leaving one missing.
+  - A release can freely be platform-specific (e.g. a Windows-only point
+    release with no Linux asset at all, because only Windows changed) -
+    check_for_update walks every release itself (newest first) looking
+    for the newest one that both beats the running version AND actually
+    has an asset for this OS, rather than trusting GitHub's own single
+    repo-wide "latest release" pointer. That pointer has no concept of
+    per-platform versions, so relying on it directly made a Windows-only
+    release silently look like "nothing newer" to every Linux machine,
+    even with an older release sitting right there with a perfectly good
+    Linux build newer than what they had. Do NOT try to route around
+    that by re-uploading an unchanged binary onto a same-platform-only
+    release just to keep the "latest" pointer satisfied for both - that
+    creates a worse bug: the binary itself still reports its own real,
+    unchanged APP_VERSION, so a Windows-tagged release carrying, say,
+    "V1.3.1"'s actual Linux build would make that Linux machine update
+    to a file that then identifies as V1.3.1 again next launch, forever
+    treating the newer Windows-only tag as "an update" it can never
+    actually reach.
   - Also attach a "<asset name>.sha256" text file (just the hex digest)
     for each binary asset - found live that a download can land with the
     exact right byte count yet still be unable to run (a Linux machine's
@@ -67,7 +73,17 @@ from pathlib import Path
 
 import requests
 
-_API_URL = "https://api.github.com/repos/{repo}/releases/latest"
+# /releases (plural, newest-first) rather than /releases/latest (singular) -
+# GitHub's own "latest" is a single repo-wide pointer with no concept of
+# per-platform versions, so a Windows-only point release makes it (wrongly)
+# look like there's nothing newer for Linux at all, even when an older
+# release still has a perfectly good, newer-than-current Linux build (see
+# this module's docstring). Walking the list ourselves and picking the
+# newest release that both (a) beats current_version and (b) actually has
+# an asset for this OS means Windows and Linux can advance independently
+# without ever needing to re-upload an unchanged binary onto every release
+# just to keep GitHub's single "latest" pointer satisfied for both.
+_API_URL = "https://api.github.com/repos/{repo}/releases?per_page=20"
 _REQUEST_TIMEOUT = 10
 _DOWNLOAD_TIMEOUT = 120
 
@@ -109,39 +125,48 @@ def check_for_update(current_version: str, repo: str):
     without special-casing errors. Never raises.
 
     Returns {"version": "V1.3.1", "asset_url": ..., "asset_name": ...} if
-    a newer release with a matching-OS asset exists, else None.
+    a newer release with a matching-OS asset exists, else None. Walks
+    every release (newest tag first) rather than trusting GitHub's own
+    "latest" pointer - see the module docstring and this file's comment
+    on _API_URL for why: that pointer is repo-wide, not per-platform.
     """
     try:
         _debug_log(f"check_for_update: current={current_version!r} repo={repo!r}")
         response = requests.get(_API_URL.format(repo=repo), timeout=_REQUEST_TIMEOUT)
         response.raise_for_status()
-        data = response.json()
-        remote_version = data.get("tag_name") or ""
-        if not remote_version:
-            return None
-        if _parse_version(remote_version) <= _parse_version(current_version):
-            _debug_log(f"check_for_update: remote={remote_version!r} not newer, nothing to do")
-            return None
+        releases = response.json()
         os_key = "win" if sys.platform == "win32" else "linux"
-        assets = data.get("assets", [])
-        for asset in assets:
-            name = asset.get("name", "")
-            if os_key in name.lower() and not name.lower().endswith(".sha256"):
-                checksum_asset = next(
-                    (a for a in assets if a.get("name") == name + ".sha256"), None
-                )
-                sha256 = _fetch_expected_sha256(checksum_asset) if checksum_asset else None
-                _debug_log(
-                    f"check_for_update: found update {remote_version!r} asset={name!r} sha256={sha256!r}"
-                )
-                return {
-                    "version": remote_version,
-                    "asset_url": asset["browser_download_url"],
-                    "asset_name": name,
-                    "sha256": sha256,
-                }
-        _debug_log(f"check_for_update: remote={remote_version!r} is newer but has no {os_key} asset")
-        return None  # newer release exists but has no asset for this OS
+        current = _parse_version(current_version)
+        best = None  # (version_tuple, remote_version_str, asset, assets) of the best match so far
+        for release in releases:
+            remote_version = release.get("tag_name") or ""
+            if not remote_version:
+                continue
+            version_tuple = _parse_version(remote_version)
+            if version_tuple <= current:
+                continue  # not newer than what we're already running
+            if best is not None and version_tuple <= best[0]:
+                continue  # already found a newer release than this one for this OS
+            assets = release.get("assets", [])
+            for asset in assets:
+                name = asset.get("name", "")
+                if os_key in name.lower() and not name.lower().endswith(".sha256"):
+                    best = (version_tuple, remote_version, asset, assets)
+                    break
+        if best is None:
+            _debug_log(f"check_for_update: no release newer than {current_version!r} has a {os_key} asset")
+            return None
+        _version_tuple, remote_version, asset, assets = best
+        name = asset["name"]
+        checksum_asset = next((a for a in assets if a.get("name") == name + ".sha256"), None)
+        sha256 = _fetch_expected_sha256(checksum_asset) if checksum_asset else None
+        _debug_log(f"check_for_update: found update {remote_version!r} asset={name!r} sha256={sha256!r}")
+        return {
+            "version": remote_version,
+            "asset_url": asset["browser_download_url"],
+            "asset_name": name,
+            "sha256": sha256,
+        }
     except Exception as exc:  # noqa: BLE001 - update-check is strictly best-effort
         _debug_log(f"check_for_update: FAILED (treated as no-update-available) - {exc!r}")
         return None
