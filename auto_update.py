@@ -8,6 +8,20 @@ Release/publishing convention this module expects:
     Linux build - e.g. "DRD-Accounting-Tool-windows.exe" and
     "DRD-Accounting-Tool-linux". Only the asset matching the running OS is
     ever downloaded.
+  - Also attach a "<asset name>.sha256" text file (just the hex digest)
+    for each binary asset - found live that a download can land with the
+    exact right byte count yet still be unable to run (a Linux machine's
+    update produced a same-size file PyInstaller's own bootloader could
+    not read as a valid archive; sha256sum of the source build, the
+    upload, and a fresh re-download from GitHub all matched each other,
+    so whatever corrupted it was specific to that one machine, never
+    conclusively identified). check_for_update looks for this file
+    automatically and, if present, download_asset verifies against it
+    before the caller is ever allowed to treat the download as good -
+    catching this (from any cause) BEFORE the working binary gets
+    touched, rather than after, since a Linux update that gets this far
+    has no way back (os.execv either starts the new image or the old
+    process is simply gone).
 
 Replacing a running executable differs fundamentally by OS, which is why
 this is split into two very different code paths in apply_update_and_restart:
@@ -30,6 +44,7 @@ this is split into two very different code paths in apply_update_and_restart:
     version with no separate helper needed.
 """
 import datetime as dt
+import hashlib
 import os
 import shutil
 import sys
@@ -95,14 +110,22 @@ def check_for_update(current_version: str, repo: str):
             _debug_log(f"check_for_update: remote={remote_version!r} not newer, nothing to do")
             return None
         os_key = "win" if sys.platform == "win32" else "linux"
-        for asset in data.get("assets", []):
+        assets = data.get("assets", [])
+        for asset in assets:
             name = asset.get("name", "")
-            if os_key in name.lower():
-                _debug_log(f"check_for_update: found update {remote_version!r} asset={name!r}")
+            if os_key in name.lower() and not name.lower().endswith(".sha256"):
+                checksum_asset = next(
+                    (a for a in assets if a.get("name") == name + ".sha256"), None
+                )
+                sha256 = _fetch_expected_sha256(checksum_asset) if checksum_asset else None
+                _debug_log(
+                    f"check_for_update: found update {remote_version!r} asset={name!r} sha256={sha256!r}"
+                )
                 return {
                     "version": remote_version,
                     "asset_url": asset["browser_download_url"],
                     "asset_name": name,
+                    "sha256": sha256,
                 }
         _debug_log(f"check_for_update: remote={remote_version!r} is newer but has no {os_key} asset")
         return None  # newer release exists but has no asset for this OS
@@ -111,29 +134,65 @@ def check_for_update(current_version: str, repo: str):
         return None
 
 
-def download_asset(url: str, dest_path: Path, on_progress=None) -> None:
+def _fetch_expected_sha256(checksum_asset: dict):
+    """Downloads a "<asset>.sha256" companion file's content (just the hex
+    digest, optionally in "sha256sum <filename>" format) and returns the
+    lowercase hex digest, or None on any failure - a missing/unreachable
+    checksum file should never block an update that would otherwise have
+    worked before this verification existed, only a *mismatching* one
+    should (see download_asset)."""
+    try:
+        response = requests.get(checksum_asset["browser_download_url"], timeout=_REQUEST_TIMEOUT)
+        response.raise_for_status()
+        first_token = response.text.strip().split()[0]
+        return first_token.lower()
+    except Exception as exc:  # noqa: BLE001 - best-effort, see docstring
+        _debug_log(f"_fetch_expected_sha256: could not fetch/parse checksum file - {exc!r}")
+        return None
+
+
+def download_asset(url: str, dest_path: Path, on_progress=None, expected_sha256: str = None) -> None:
     """Streams the download to dest_path. Raises on any failure (caller's
     responsibility to show that to the operator - unlike check_for_update,
     a failure here is after the operator already said "yes, update me",
-    so it should be visible, not silently swallowed)."""
-    _debug_log(f"download_asset: starting {url!r} -> {dest_path}")
+    so it should be visible, not silently swallowed).
+
+    If expected_sha256 is given, the fully-downloaded file is hashed and
+    compared before being moved to dest_path - a mismatch raises instead
+    of ever letting the caller treat a bad download as good (see this
+    module's docstring for why this exists: a same-byte-count-but-broken
+    download that reached this point undetected, before this check
+    existed, corrupted a Linux machine's own running installation with no
+    way back)."""
+    _debug_log(f"download_asset: starting {url!r} -> {dest_path} (expected_sha256={expected_sha256!r})")
     try:
         response = requests.get(url, stream=True, timeout=_DOWNLOAD_TIMEOUT)
         response.raise_for_status()
         total = int(response.headers.get("content-length") or 0)
         written = 0
+        hasher = hashlib.sha256()
         tmp_path = dest_path.with_suffix(dest_path.suffix + ".part")
         with open(tmp_path, "wb") as f:
             for chunk in response.iter_content(chunk_size=1024 * 256):
                 if not chunk:
                     continue
                 f.write(chunk)
+                hasher.update(chunk)
                 written += len(chunk)
                 if on_progress and total:
                     on_progress(written, total)
         if total and written != total:
             tmp_path.unlink(missing_ok=True)
             raise IOError(f"Download incomplete: got {written} of {total} bytes")
+        if expected_sha256:
+            actual = hasher.hexdigest()
+            if actual != expected_sha256:
+                tmp_path.unlink(missing_ok=True)
+                raise IOError(
+                    f"Download failed checksum verification: expected {expected_sha256}, got {actual} "
+                    f"({written} bytes) - not applying this update"
+                )
+            _debug_log(f"download_asset: sha256 verified ({actual})")
         tmp_path.replace(dest_path)
         _debug_log(f"download_asset: done, {written} bytes written to {dest_path}")
     except Exception as exc:

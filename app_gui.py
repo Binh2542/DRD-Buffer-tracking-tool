@@ -971,7 +971,10 @@ class WebdbApp:
             target_exe = Path(sys.executable).resolve()
             dest = target_exe.with_name("update_download" + target_exe.suffix)
             try:
-                download_asset(update_info["asset_url"], dest, on_progress=_on_progress)
+                download_asset(
+                    update_info["asset_url"], dest, on_progress=_on_progress,
+                    expected_sha256=update_info.get("sha256"),
+                )
             except Exception as exc:  # noqa: BLE001 - shown to the operator, dialog stays up to retry
                 _fail(f"Download failed: {exc}")
                 return
