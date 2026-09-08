@@ -226,7 +226,7 @@ def _pcb_choice_rules_to_jsonable(rules):
 # hand whenever a build is cut, since PyInstaller doesn't derive one on
 # its own. Cross-platform: Tkinter's title bar is the same call on every
 # OS this ships on.
-APP_VERSION = "V1.3.1"
+APP_VERSION = "V1.3.2"
 # Checked at every startup (see WebdbApp.__init__/_check_for_update_async) -
 # a public repo so this needs no embedded token (see auto_update.py's
 # docstring for the release/asset naming convention this expects).
