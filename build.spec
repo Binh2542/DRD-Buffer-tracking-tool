@@ -50,7 +50,16 @@ if is_mac:
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
-        upx=True,
+        # UPX-compressing the bundled Python DLL/extension modules found
+        # live to intermittently break specific stdlib C-extension imports
+        # at runtime (e.g. "ModuleNotFoundError: No module named
+        # 'unicodedata'" deep inside matplotlib on a build that otherwise
+        # worked fine) - reproduced across more than one machine, so this
+        # isn't one machine's antivirus/environment being unusual, it's
+        # UPX corrupting something in the packed DLL itself. UPX is a
+        # pure size optimization (trades a larger file for faster/more
+        # reliable startup) - not worth the risk for this app.
+        upx=False,
         console=False,
         disable_windowed_traceback=False,
         argv_emulation=True,
@@ -61,7 +70,7 @@ if is_mac:
     )
     coll = COLLECT(
         exe, a.binaries, a.datas,
-        strip=False, upx=True, upx_exclude=[], name=APP_NAME,
+        strip=False, upx=False, upx_exclude=[], name=APP_NAME,
     )
     app = BUNDLE(
         coll,
@@ -77,7 +86,16 @@ else:
         debug=False,
         bootloader_ignore_signals=False,
         strip=False,
-        upx=True,
+        # UPX-compressing the bundled Python DLL/extension modules found
+        # live to intermittently break specific stdlib C-extension imports
+        # at runtime (e.g. "ModuleNotFoundError: No module named
+        # 'unicodedata'" deep inside matplotlib on a build that otherwise
+        # worked fine) - reproduced across more than one machine, so this
+        # isn't one machine's antivirus/environment being unusual, it's
+        # UPX corrupting something in the packed DLL itself. UPX is a
+        # pure size optimization (trades a larger file for faster/more
+        # reliable startup) - not worth the risk for this app.
+        upx=False,
         upx_exclude=[],
         runtime_tmpdir=None,
         console=False,

@@ -47,6 +47,7 @@ import datetime as dt
 import hashlib
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import time
@@ -236,6 +237,45 @@ def _retry(fn, label, attempts=20, delay=0.5):
     raise last_err
 
 
+def _is_running_windows(exe_name: str) -> bool:
+    """True if a process with this exact image name is currently running,
+    via `tasklist` (no extra dependency needed for one check)."""
+    try:
+        result = subprocess.run(
+            ["tasklist", "/FI", f"IMAGENAME eq {exe_name}"],
+            capture_output=True, text=True, timeout=5,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        return exe_name.lower() in result.stdout.lower()
+    except Exception as exc:  # noqa: BLE001 - best-effort check, see caller
+        _debug_log(f"_is_running_windows: check failed - {exc!r}")
+        return False
+
+
+def _launch_and_confirm_windows(target_exe_path: Path, attempts: int = 2) -> None:
+    """Starts target_exe_path (os.startfile, the same call Explorer itself
+    uses for a double-click) and confirms it actually stayed running,
+    retrying once if not. Found live that a freshly-downloaded exe's very
+    first launch can fail this way (a bootloader import error deep in a
+    bundled dependency) while every launch after the first succeeds -
+    consistent with antivirus real-time scanning racing PyInstaller's
+    onefile self-extraction on a file it hasn't seen before, rather than
+    anything actually wrong with the build. Not a fix for that race (it
+    resolves itself by the next launch either way) - just automates the
+    "close the error and reopen it" workaround an operator would
+    otherwise have to discover and do by hand."""
+    exe_name = target_exe_path.name
+    for attempt in range(1, attempts + 1):
+        _debug_log(f"_launch_and_confirm_windows: os.startfile attempt {attempt}/{attempts}")
+        os.startfile(str(target_exe_path))  # noqa: S606
+        time.sleep(2.5)
+        if _is_running_windows(exe_name):
+            _debug_log(f"_launch_and_confirm_windows: confirmed running on attempt {attempt}")
+            return
+        _debug_log(f"_launch_and_confirm_windows: not running after attempt {attempt} - likely crashed on launch")
+    _debug_log("_launch_and_confirm_windows: gave up confirming - exiting anyway, nothing more this process can do")
+
+
 def _apply_update_windows(new_file_path: Path, target_exe_path: Path) -> None:
     """Renames the currently-running exe aside, puts the newly-downloaded
     one in its exact original place (same name AND path, so an existing
@@ -260,9 +300,8 @@ def _apply_update_windows(new_file_path: Path, target_exe_path: Path) -> None:
         else:
             _debug_log(f"_apply_update_windows: {target_exe_path} does not exist, skipping rename-aside")
         _retry(lambda: shutil.move(str(new_file_path), str(target_exe_path)), "move new exe into place")
-        _debug_log(f"_apply_update_windows: about to os.startfile({target_exe_path})")
-        os.startfile(str(target_exe_path))  # noqa: S606 - identical to a normal double-click
-        _debug_log("_apply_update_windows: os.startfile returned without raising - about to os._exit(0)")
+        _launch_and_confirm_windows(target_exe_path)
+        _debug_log("_apply_update_windows: launch confirmed - about to os._exit(0)")
     except Exception as exc:  # noqa: BLE001 - log absolutely everything before it can propagate/kill us
         _debug_log(f"_apply_update_windows: UNCAUGHT-UNTIL-NOW EXCEPTION - {exc!r}")
         raise
