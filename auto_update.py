@@ -29,9 +29,11 @@ this is split into two very different code paths in apply_update_and_restart:
     process's own image with the new file) restarts straight into the new
     version with no separate helper needed.
 """
+import datetime as dt
 import os
 import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -40,6 +42,25 @@ import requests
 _API_URL = "https://api.github.com/repos/{repo}/releases/latest"
 _REQUEST_TIMEOUT = 10
 _DOWNLOAD_TIMEOUT = 120
+
+# TEMPORARY diagnostic log - the update mechanism has failed silently on at
+# least one real machine (app just disappears mid-update, no error dialog,
+# no file changes) with no clue why anything this module itself could catch
+# would explain it. Appending a line after every single step, flushed
+# immediately, means whatever DOES get written before the process
+# disappears (if anything does) is the best lead available - remove once
+# the real cause is found and fixed.
+_DEBUG_LOG = Path(tempfile.gettempdir()) / "drd_update_debug.log"
+
+
+def _debug_log(message: str) -> None:
+    try:
+        with open(_DEBUG_LOG, "a", encoding="utf-8") as f:
+            f.write(f"{dt.datetime.now().isoformat()} - {message}\n")
+            f.flush()
+            os.fsync(f.fileno())
+    except OSError:
+        pass  # best-effort - never let logging itself be the reason this breaks
 
 
 def _parse_version(v: str):
@@ -63,6 +84,7 @@ def check_for_update(current_version: str, repo: str):
     a newer release with a matching-OS asset exists, else None.
     """
     try:
+        _debug_log(f"check_for_update: current={current_version!r} repo={repo!r}")
         response = requests.get(_API_URL.format(repo=repo), timeout=_REQUEST_TIMEOUT)
         response.raise_for_status()
         data = response.json()
@@ -70,18 +92,22 @@ def check_for_update(current_version: str, repo: str):
         if not remote_version:
             return None
         if _parse_version(remote_version) <= _parse_version(current_version):
+            _debug_log(f"check_for_update: remote={remote_version!r} not newer, nothing to do")
             return None
         os_key = "win" if sys.platform == "win32" else "linux"
         for asset in data.get("assets", []):
             name = asset.get("name", "")
             if os_key in name.lower():
+                _debug_log(f"check_for_update: found update {remote_version!r} asset={name!r}")
                 return {
                     "version": remote_version,
                     "asset_url": asset["browser_download_url"],
                     "asset_name": name,
                 }
+        _debug_log(f"check_for_update: remote={remote_version!r} is newer but has no {os_key} asset")
         return None  # newer release exists but has no asset for this OS
-    except Exception:  # noqa: BLE001 - update-check is strictly best-effort
+    except Exception as exc:  # noqa: BLE001 - update-check is strictly best-effort
+        _debug_log(f"check_for_update: FAILED (treated as no-update-available) - {exc!r}")
         return None
 
 
@@ -90,23 +116,29 @@ def download_asset(url: str, dest_path: Path, on_progress=None) -> None:
     responsibility to show that to the operator - unlike check_for_update,
     a failure here is after the operator already said "yes, update me",
     so it should be visible, not silently swallowed)."""
-    response = requests.get(url, stream=True, timeout=_DOWNLOAD_TIMEOUT)
-    response.raise_for_status()
-    total = int(response.headers.get("content-length") or 0)
-    written = 0
-    tmp_path = dest_path.with_suffix(dest_path.suffix + ".part")
-    with open(tmp_path, "wb") as f:
-        for chunk in response.iter_content(chunk_size=1024 * 256):
-            if not chunk:
-                continue
-            f.write(chunk)
-            written += len(chunk)
-            if on_progress and total:
-                on_progress(written, total)
-    if total and written != total:
-        tmp_path.unlink(missing_ok=True)
-        raise IOError(f"Download incomplete: got {written} of {total} bytes")
-    tmp_path.replace(dest_path)
+    _debug_log(f"download_asset: starting {url!r} -> {dest_path}")
+    try:
+        response = requests.get(url, stream=True, timeout=_DOWNLOAD_TIMEOUT)
+        response.raise_for_status()
+        total = int(response.headers.get("content-length") or 0)
+        written = 0
+        tmp_path = dest_path.with_suffix(dest_path.suffix + ".part")
+        with open(tmp_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=1024 * 256):
+                if not chunk:
+                    continue
+                f.write(chunk)
+                written += len(chunk)
+                if on_progress and total:
+                    on_progress(written, total)
+        if total and written != total:
+            tmp_path.unlink(missing_ok=True)
+            raise IOError(f"Download incomplete: got {written} of {total} bytes")
+        tmp_path.replace(dest_path)
+        _debug_log(f"download_asset: done, {written} bytes written to {dest_path}")
+    except Exception as exc:
+        _debug_log(f"download_asset: FAILED - {exc!r}")
+        raise
 
 
 def apply_update_and_restart(new_file_path: Path, target_exe_path: Path) -> None:
@@ -123,21 +155,25 @@ def apply_update_and_restart(new_file_path: Path, target_exe_path: Path) -> None
         _apply_update_linux(new_file_path, target_exe_path)
 
 
-def _retry(fn, attempts=20, delay=0.5):
+def _retry(fn, label, attempts=20, delay=0.5):
     """Retries fn() (a rename/move) up to `attempts` times, `delay` seconds
     apart, re-raising the last error if it never succeeds. A just-
     downloaded, unsigned .exe being briefly locked by antivirus/EDR
     scanning is a realistic transient failure on factory Windows machines -
     20x/0.5s (10s total) comfortably outlasts that without the operator
-    noticing more than a brief pause."""
+    noticing more than a brief pause. Logs every failed attempt's exact
+    exception (label identifies which step, since this is shared by both)."""
     last_err = None
-    for _ in range(attempts):
+    for attempt in range(1, attempts + 1):
         try:
             fn()
+            _debug_log(f"{label}: succeeded on attempt {attempt}")
             return
         except OSError as exc:
             last_err = exc
+            _debug_log(f"{label}: attempt {attempt}/{attempts} failed - {exc!r} (winerror={getattr(exc, 'winerror', None)})")
             time.sleep(delay)
+    _debug_log(f"{label}: giving up after {attempts} attempts - {last_err!r}")
     raise last_err
 
 
@@ -151,16 +187,26 @@ def _apply_update_windows(new_file_path: Path, target_exe_path: Path) -> None:
     retry exhausted) rather than silently leaving the operator with
     nothing - see this module's docstring for why this doesn't need (and
     deliberately avoids) a separate helper process."""
-    backup_path = target_exe_path.with_name(target_exe_path.name + ".bak")
-    if backup_path.exists():
-        try:
-            backup_path.unlink()
-        except OSError:
-            pass
-    if target_exe_path.exists():
-        _retry(lambda: target_exe_path.rename(backup_path))
-    _retry(lambda: shutil.move(str(new_file_path), str(target_exe_path)))
-    os.startfile(str(target_exe_path))  # noqa: S606 - identical to a normal double-click
+    _debug_log(f"_apply_update_windows: start new={new_file_path} target={target_exe_path} pid={os.getpid()}")
+    try:
+        backup_path = target_exe_path.with_name(target_exe_path.name + ".bak")
+        if backup_path.exists():
+            try:
+                backup_path.unlink()
+                _debug_log(f"_apply_update_windows: removed stale {backup_path}")
+            except OSError as exc:
+                _debug_log(f"_apply_update_windows: could not remove stale {backup_path} - {exc!r} (non-fatal)")
+        if target_exe_path.exists():
+            _retry(lambda: target_exe_path.rename(backup_path), "rename old exe aside")
+        else:
+            _debug_log(f"_apply_update_windows: {target_exe_path} does not exist, skipping rename-aside")
+        _retry(lambda: shutil.move(str(new_file_path), str(target_exe_path)), "move new exe into place")
+        _debug_log(f"_apply_update_windows: about to os.startfile({target_exe_path})")
+        os.startfile(str(target_exe_path))  # noqa: S606 - identical to a normal double-click
+        _debug_log("_apply_update_windows: os.startfile returned without raising - about to os._exit(0)")
+    except Exception as exc:  # noqa: BLE001 - log absolutely everything before it can propagate/kill us
+        _debug_log(f"_apply_update_windows: UNCAUGHT-UNTIL-NOW EXCEPTION - {exc!r}")
+        raise
     os._exit(0)  # noqa: SLF001 - immediate exit, not a normal Tk shutdown: the
     # replacement above already fully happened and the new process is
     # already launched, so there's nothing left for this process to do.
