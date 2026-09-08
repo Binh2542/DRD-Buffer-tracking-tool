@@ -8,6 +8,18 @@ Release/publishing convention this module expects:
     Linux build - e.g. "DRD-Accounting-Tool-windows.exe" and
     "DRD-Accounting-Tool-linux". Only the asset matching the running OS is
     ever downloaded.
+  - EVERY release needs a working asset for BOTH win and linux, even one
+    that only changed on one platform - check_for_update always reads
+    GitHub's own "latest release" (by publish time, not per-OS), so a
+    Windows-only release with no Linux asset makes every Linux machine's
+    check_for_update return None (a newer release exists, but "has no
+    asset for this OS" - see below) even though an OLDER release further
+    back still has a perfectly good, newer-than-what-they-have Linux
+    build. Found live: two Windows-only point releases in a row made
+    Linux machines stop seeing updates entirely, silently, with no error
+    anywhere - simplest fix is to always re-upload the last known-good
+    Linux (or Windows) asset unchanged onto a same-platform-only release
+    rather than ever leaving one missing.
   - Also attach a "<asset name>.sha256" text file (just the hex digest)
     for each binary asset - found live that a download can land with the
     exact right byte count yet still be unable to run (a Linux machine's
