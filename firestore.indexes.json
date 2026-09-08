@@ -1,0 +1,13 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "air_records",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {"fieldPath": "qr", "order": "ASCENDING"},
+        {"fieldPath": "created_at", "order": "DESCENDING"}
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

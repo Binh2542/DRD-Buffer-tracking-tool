@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" href="favicon.png">
+<title>Assembly Inline Rework Tool</title>
+<style>
+  :root {
+    --bg: #14171c;
+    --panel-bg: #1b1f27;
+    --field-bg: #232833;
+    --border: #2f3541;
+    --text: #e6e9ee;
+    --muted: #8b93a1;
+    --accent: #21c98f;
+    --accent-text: #0b1410;
+    --danger: #e5626a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", system-ui, sans-serif;
+    padding: 24px;
+  }
+  .hidden { display: none !important; }
+  h1 {
+    font-size: 26px;
+    margin: 0 0 24px;
+    color: var(--accent);
+    text-align: center;
+  }
+  .card {
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px;
+    width: 100%;
+    max-width: 440px;
+  }
+  .card h2 {
+    margin: 0 0 16px;
+    font-size: 18px;
+    color: var(--text);
+  }
+  label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 14px;
+    color: var(--muted);
+  }
+  .field { margin-bottom: 14px; }
+  input, select {
+    width: 100%;
+    font-size: 16px;
+    padding: 12px;
+    border-radius: 8px;
+    border: 2px solid var(--border);
+    background: var(--field-bg);
+    color: var(--text);
+    outline: none;
+  }
+  input:focus, select:focus { border-color: var(--accent); }
+  select { cursor: pointer; }
+  button {
+    font-family: inherit;
+    cursor: pointer;
+  }
+  .btn-primary {
+    width: 100%;
+    margin-top: 8px;
+    background: var(--accent);
+    border: none;
+    color: var(--accent-text);
+    font-size: 16px;
+    font-weight: 600;
+    padding: 13px;
+    border-radius: 8px;
+  }
+  .btn-primary:hover { filter: brightness(1.08); }
+  .btn-secondary {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 14px;
+  }
+  .btn-secondary:hover { border-color: var(--accent); }
+  .btn-danger {
+    background: none;
+    border: 1px solid var(--danger);
+    color: var(--danger);
+    padding: 6px 12px;
+    border-radius: 6px;
+    font-size: 13px;
+  }
+  .btn-danger:hover { background: rgba(229, 98, 106, 0.15); }
+  .btn-icon {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    width: 38px;
+    height: 38px;
+    border-radius: 8px;
+    font-size: 18px;
+  }
+  .btn-icon:hover { border-color: var(--accent); color: var(--text); }
+  .notice {
+    margin-top: 14px;
+    padding: 10px 14px;
+    border-radius: 8px;
+    font-size: 14px;
+    min-height: 20px;
+    transition: opacity 0.2s;
+  }
+  .notice.success { background: rgba(33, 201, 143, 0.15); color: var(--accent); }
+  .notice.error { background: rgba(229, 98, 106, 0.15); color: var(--danger); }
+  .notice.hidden { opacity: 0; }
+
+  #app-header {
+    width: 100%;
+    max-width: 920px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 24px;
+  }
+  #app-header h1 { margin: 0; text-align: left; }
+  .header-right { display: flex; align-items: center; gap: 10px; }
+  .session-label { color: var(--muted); font-size: 14px; }
+  .session-label strong { color: var(--text); }
+
+  #main-content {
+    width: 100%;
+    max-width: 920px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px;
+    align-items: flex-start;
+    justify-content: center;
+  }
+  #main-content .card { flex: 1 1 380px; }
+
+  .history-list { margin-top: 16px; max-height: 360px; overflow-y: auto; }
+  .history-item {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 10px;
+    font-size: 14px;
+  }
+  .history-item .qr { font-weight: 600; color: var(--accent); margin-bottom: 4px; }
+  .history-item .row { color: var(--muted); }
+  .history-item .row strong { color: var(--text); font-weight: 500; }
+
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    padding: 24px;
+  }
+  .modal-card {
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px;
+    width: 100%;
+    max-width: 560px;
+    max-height: 85vh;
+    overflow-y: auto;
+  }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); font-size: 14px; }
+  th { color: var(--muted); font-weight: 500; }
+  .role-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 12px;
+  }
+  .role-badge.admin { background: rgba(33, 201, 143, 0.15); color: var(--accent); }
+  .role-badge.user { background: rgba(139, 147, 161, 0.15); color: var(--muted); }
+  .form-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .form-row .field { flex: 1 1 120px; margin-bottom: 0; }
+</style>
+</head>
+<body>
+
+  <div class="card hidden" id="login-card" style="margin-top: 10vh;">
+    <h1>Assembly Inline<br>Rework Tool</h1>
+    <div class="field">
+      <label for="login-username">Username</label>
+      <input id="login-username" type="text" autocomplete="username">
+    </div>
+    <div class="field">
+      <label for="login-password">Password</label>
+      <input id="login-password" type="password" autocomplete="current-password">
+    </div>
+    <button class="btn-primary" id="login-btn" type="button">Log In</button>
+    <div class="notice hidden" id="login-notice"></div>
+  </div>
+
+  <div class="hidden" id="app-shell" style="width: 100%; display: flex; flex-direction: column; align-items: center;">
+    <div id="app-header">
+      <h1>Assembly Inline Rework Tool</h1>
+      <div class="header-right">
+        <span class="session-label">Signed in as <strong id="session-user"></strong></span>
+        <button class="btn-icon hidden" id="settings-btn" type="button" title="Settings">&#9881;</button>
+        <button class="btn-secondary" id="logout-btn" type="button">Log out</button>
+      </div>
+    </div>
+
+    <div id="main-content">
+      <div class="card">
+        <h2>Scan &amp; Save</h2>
+        <div class="field">
+          <label for="scan-qr">QR</label>
+          <input id="scan-qr" type="text" placeholder="Scan or type QR code" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="defect-select">Defect</label>
+          <select id="defect-select"><option value="">Select defect...</option></select>
+        </div>
+        <div class="field">
+          <label for="action-select">What has been done</label>
+          <select id="action-select"><option value="">Select action...</option></select>
+        </div>
+        <button class="btn-primary" id="save-btn" type="button">Save</button>
+        <div class="notice hidden" id="save-notice"></div>
+      </div>
+
+      <div class="card">
+        <h2>Search</h2>
+        <div class="field">
+          <label for="search-qr">QR</label>
+          <input id="search-qr" type="text" placeholder="Scan or type QR code, then Enter" autocomplete="off">
+        </div>
+        <div id="search-status" class="notice hidden"></div>
+        <div class="history-list" id="history-list"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="settings-modal">
+    <div class="modal-card">
+      <h2>Accounts</h2>
+      <table>
+        <thead><tr><th>Username</th><th>Role</th><th></th></tr></thead>
+        <tbody id="accounts-tbody"></tbody>
+      </table>
+      <div class="form-row">
+        <div class="field">
+          <label for="new-username">Username</label>
+          <input id="new-username" type="text">
+        </div>
+        <div class="field">
+          <label for="new-password">Password</label>
+          <input id="new-password" type="password">
+        </div>
+        <div class="field" style="flex: 0 0 130px;">
+          <label for="new-role">Role</label>
+          <select id="new-role">
+            <option value="user">User</option>
+            <option value="admin">Admin</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn-primary" id="add-account-btn" type="button" style="margin-top: 12px;">
+        Add / Update Account
+      </button>
+      <div class="notice hidden" id="settings-notice"></div>
+      <div style="text-align: right; margin-top: 16px;">
+        <button class="btn-secondary" id="settings-close-btn" type="button">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
+    import {
+      getFirestore, collection, addDoc, serverTimestamp, query, where, orderBy, getDocs,
+    } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+    import {
+      getAuth, signInWithCustomToken, onAuthStateChanged, signOut,
+    } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
+    import {
+      getFunctions, httpsCallable,
+    } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-functions.js";
+
+    // Same project as the DRD Accounting Tool's queue pages (this tool
+    // shares that project's billing/infra per the user - see
+    // firestore.rules' air_records block for how its data still stays
+    // fully separate). Not a secret - access is controlled by Firestore
+    // Security Rules, not by hiding this config.
+    const firebaseConfig = {
+      apiKey: "AIzaSyA6xtcJLe0FWm7ichql6uyktXm3k1C34oI",
+      authDomain: "drd-buffer-tracking-c5a02.firebaseapp.com",
+      projectId: "drd-buffer-tracking-c5a02",
+      storageBucket: "drd-buffer-tracking-c5a02.firebasestorage.app",
+      messagingSenderId: "17926416666",
+      appId: "1:17926416666:web:feb33acfa8381c38fb64a3",
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const auth = getAuth(app);
+    const functions = getFunctions(app, "asia-east2");
+    const airLogin = httpsCallable(functions, "airLogin");
+    const airGetOptions = httpsCallable(functions, "airGetOptions");
+    const airListAccounts = httpsCallable(functions, "airListAccounts");
+    const airSetAccount = httpsCallable(functions, "airSetAccount");
+    const airSetRole = httpsCallable(functions, "airSetRole");
+    const airDeleteAccount = httpsCallable(functions, "airDeleteAccount");
+
+    const loginCard = document.getElementById("login-card");
+    const appShell = document.getElementById("app-shell");
+    const usernameInput = document.getElementById("login-username");
+    const passwordInput = document.getElementById("login-password");
+    const loginBtn = document.getElementById("login-btn");
+    const loginNoticeEl = document.getElementById("login-notice");
+    const sessionUserEl = document.getElementById("session-user");
+    const settingsBtn = document.getElementById("settings-btn");
+    const logoutBtn = document.getElementById("logout-btn");
+
+    const scanQrInput = document.getElementById("scan-qr");
+    const defectSelect = document.getElementById("defect-select");
+    const actionSelect = document.getElementById("action-select");
+    const saveBtn = document.getElementById("save-btn");
+    const saveNoticeEl = document.getElementById("save-notice");
+
+    const searchQrInput = document.getElementById("search-qr");
+    const searchStatusEl = document.getElementById("search-status");
+    const historyListEl = document.getElementById("history-list");
+
+    const settingsModal = document.getElementById("settings-modal");
+    const settingsCloseBtn = document.getElementById("settings-close-btn");
+    const accountsTbody = document.getElementById("accounts-tbody");
+    const newUsernameInput = document.getElementById("new-username");
+    const newPasswordInput = document.getElementById("new-password");
+    const newRoleSelect = document.getElementById("new-role");
+    const addAccountBtn = document.getElementById("add-account-btn");
+    const settingsNoticeEl = document.getElementById("settings-notice");
+
+    let currentRole = null;
+    let noticeTimers = {};
+
+    function showNotice(el, message, kind, key) {
+      el.textContent = message;
+      el.className = `notice ${kind}`;
+      clearTimeout(noticeTimers[key]);
+      noticeTimers[key] = setTimeout(() => {
+        el.className = "notice hidden";
+      }, 3500);
+    }
+
+    function fillSelect(select, values, placeholder) {
+      select.innerHTML = "";
+      const opt0 = document.createElement("option");
+      opt0.value = "";
+      opt0.textContent = placeholder;
+      select.appendChild(opt0);
+      for (const value of values) {
+        const opt = document.createElement("option");
+        opt.value = value;
+        opt.textContent = value;
+        select.appendChild(opt);
+      }
+    }
+
+    async function loadOptions() {
+      try {
+        const result = await airGetOptions();
+        fillSelect(defectSelect, result.data.defects, "Select defect...");
+        fillSelect(actionSelect, result.data.actions, "Select action...");
+      } catch (err) {
+        showNotice(saveNoticeEl, `Failed to load options: ${err.message}`, "error", "save");
+      }
+    }
+
+    async function doLogin() {
+      const username = usernameInput.value.trim();
+      const password = passwordInput.value;
+      if (!username || !password) {
+        showNotice(loginNoticeEl, "Enter both a username and password.", "error", "login");
+        return;
+      }
+      loginBtn.disabled = true;
+      try {
+        const result = await airLogin({ username, password });
+        await signInWithCustomToken(auth, result.data.token);
+        passwordInput.value = "";
+      } catch (err) {
+        showNotice(loginNoticeEl, err.message || "Login failed - please try again.", "error", "login");
+      } finally {
+        loginBtn.disabled = false;
+      }
+    }
+
+    loginBtn.addEventListener("click", doLogin);
+    passwordInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        doLogin();
+      }
+    });
+    logoutBtn.addEventListener("click", () => signOut(auth));
+
+    async function submitSave() {
+      const qr = scanQrInput.value.trim();
+      const defect = defectSelect.value;
+      const action = actionSelect.value;
+      if (!qr || !defect || !action) {
+        showNotice(saveNoticeEl, "Scan a QR and select both Defect and What has been done.", "error", "save");
+        return;
+      }
+      saveBtn.disabled = true;
+      try {
+        await addDoc(collection(db, "air_records"), {
+          qr,
+          defect,
+          action,
+          username: auth.currentUser.uid,
+          created_at: serverTimestamp(),
+        });
+        showNotice(saveNoticeEl, `Saved: ${qr}`, "success", "save");
+        scanQrInput.value = "";
+        defectSelect.value = "";
+        actionSelect.value = "";
+        scanQrInput.focus();
+      } catch (err) {
+        showNotice(saveNoticeEl, `Error - please try again (${err.code || err.message})`, "error", "save");
+      } finally {
+        saveBtn.disabled = false;
+      }
+    }
+
+    saveBtn.addEventListener("click", submitSave);
+    scanQrInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        submitSave();
+      }
+    });
+
+    function formatTime(timestamp) {
+      if (!timestamp) return "";
+      const date = timestamp.toDate();
+      return date.toLocaleString();
+    }
+
+    async function runSearch() {
+      const qr = searchQrInput.value.trim();
+      historyListEl.innerHTML = "";
+      if (!qr) return;
+      searchStatusEl.className = "notice";
+      searchStatusEl.textContent = "Searching...";
+      try {
+        const q = query(
+          collection(db, "air_records"),
+          where("qr", "==", qr),
+          orderBy("created_at", "desc"),
+        );
+        const snapshot = await getDocs(q);
+        if (snapshot.empty) {
+          searchStatusEl.textContent = "No history";
+          searchStatusEl.className = "notice error";
+          return;
+        }
+        searchStatusEl.className = "notice hidden";
+        for (const doc of snapshot.docs) {
+          const data = doc.data();
+          const item = document.createElement("div");
+          item.className = "history-item";
+          item.innerHTML = `
+            <div class="qr">${data.qr}</div>
+            <div class="row"><strong>Defect:</strong> ${data.defect}</div>
+            <div class="row"><strong>Done:</strong> ${data.action}</div>
+            <div class="row"><strong>By:</strong> ${data.username} &middot; ${formatTime(data.created_at)}</div>
+          `;
+          historyListEl.appendChild(item);
+        }
+      } catch (err) {
+        searchStatusEl.className = "notice error";
+        searchStatusEl.textContent = `Error - please try again (${err.code || err.message})`;
+      }
+    }
+
+    searchQrInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        runSearch();
+      }
+    });
+
+    // ---- Settings (admin only) ----
+    async function reloadAccounts() {
+      accountsTbody.innerHTML = "";
+      try {
+        const result = await airListAccounts();
+        const accounts = result.data.accounts.slice().sort((a, b) => a.username.localeCompare(b.username));
+        for (const account of accounts) {
+          const tr = document.createElement("tr");
+          const roleClass = account.role === "admin" ? "admin" : "user";
+          const toggleLabel = account.role === "admin" ? "Make User" : "Make Admin";
+          tr.innerHTML = `
+            <td>${account.username}</td>
+            <td><span class="role-badge ${roleClass}">${account.role}</span></td>
+            <td style="text-align: right; white-space: nowrap;">
+              <button class="btn-secondary toggle-role-btn" data-username="${account.username}" data-role="${account.role}">${toggleLabel}</button>
+              <button class="btn-danger remove-btn" data-username="${account.username}">Remove</button>
+            </td>
+          `;
+          accountsTbody.appendChild(tr);
+        }
+      } catch (err) {
+        showNotice(settingsNoticeEl, `Failed to load accounts: ${err.message}`, "error", "settings");
+      }
+    }
+
+    accountsTbody.addEventListener("click", async (event) => {
+      const toggleBtn = event.target.closest(".toggle-role-btn");
+      const removeBtn = event.target.closest(".remove-btn");
+      if (toggleBtn) {
+        const username = toggleBtn.dataset.username;
+        const newRole = toggleBtn.dataset.role === "admin" ? "user" : "admin";
+        try {
+          await airSetRole({ username, role: newRole });
+          await reloadAccounts();
+        } catch (err) {
+          showNotice(settingsNoticeEl, err.message, "error", "settings");
+        }
+      } else if (removeBtn) {
+        const username = removeBtn.dataset.username;
+        if (!confirm(`Remove account "${username}"?`)) return;
+        try {
+          await airDeleteAccount({ username });
+          await reloadAccounts();
+        } catch (err) {
+          showNotice(settingsNoticeEl, err.message, "error", "settings");
+        }
+      }
+    });
+
+    addAccountBtn.addEventListener("click", async () => {
+      const username = newUsernameInput.value.trim();
+      const password = newPasswordInput.value;
+      const role = newRoleSelect.value;
+      if (!username || !password) {
+        showNotice(settingsNoticeEl, "Enter both a username and password.", "error", "settings");
+        return;
+      }
+      try {
+        await airSetAccount({ username, password, role });
+        newUsernameInput.value = "";
+        newPasswordInput.value = "";
+        showNotice(settingsNoticeEl, `Saved: ${username}`, "success", "settings");
+        await reloadAccounts();
+      } catch (err) {
+        showNotice(settingsNoticeEl, err.message, "error", "settings");
+      }
+    });
+
+    settingsBtn.addEventListener("click", async () => {
+      settingsModal.classList.remove("hidden");
+      await reloadAccounts();
+    });
+    settingsCloseBtn.addEventListener("click", () => {
+      settingsModal.classList.add("hidden");
+    });
+
+    onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        loginCard.classList.add("hidden");
+        appShell.classList.remove("hidden");
+        sessionUserEl.textContent = user.uid;
+        currentRole = (await user.getIdTokenResult()).claims.role || "user";
+        settingsBtn.classList.toggle("hidden", currentRole !== "admin");
+        await loadOptions();
+        scanQrInput.focus();
+      } else {
+        appShell.classList.add("hidden");
+        settingsModal.classList.add("hidden");
+        loginCard.classList.remove("hidden");
+        usernameInput.focus();
+      }
+    });
+  </script>
+</body>
+</html>

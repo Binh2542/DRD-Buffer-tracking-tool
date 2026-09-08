@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="icon" type="image/png" href="/favicon.png">
+<title>LONG TEST - QR Scan Queue</title>
+<style>
+  :root {
+    --bg: #14171c;
+    --panel-bg: #1b1f27;
+    --field-bg: #232833;
+    --border: #2f3541;
+    --text: #e6e9ee;
+    --muted: #8b93a1;
+    --accent: #21c98f;
+    --danger: #e5626a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", system-ui, sans-serif;
+    padding: 24px;
+  }
+  h1 {
+    font-size: 26px;
+    margin: 0 0 24px;
+    color: var(--accent);
+    text-align: center;
+  }
+  .card {
+    background: var(--panel-bg);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 32px;
+    width: 100%;
+    max-width: 480px;
+    text-align: center;
+  }
+  .hidden { display: none !important; }
+  input {
+    width: 100%;
+    font-size: 24px;
+    padding: 16px;
+    border-radius: 8px;
+    border: 2px solid var(--border);
+    background: var(--field-bg);
+    color: var(--text);
+    text-align: center;
+    outline: none;
+  }
+  input:focus { border-color: var(--accent); }
+  .login-field {
+    margin-bottom: 14px;
+    text-align: left;
+  }
+  .login-field label {
+    display: block;
+    margin-bottom: 6px;
+    font-size: 14px;
+    color: var(--muted);
+  }
+  .login-field input {
+    font-size: 18px;
+    padding: 12px;
+    text-align: left;
+  }
+  button.btn-primary {
+    width: 100%;
+    margin-top: 8px;
+    background: var(--accent);
+    border: none;
+    color: #0b1410;
+    font-size: 18px;
+    font-weight: 600;
+    padding: 14px;
+    border-radius: 8px;
+    cursor: pointer;
+  }
+  button.btn-primary:hover { filter: brightness(1.08); }
+  .session-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin-bottom: 16px;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .session-bar strong { color: var(--text); }
+  button.link-btn {
+    background: none;
+    border: none;
+    color: var(--muted);
+    text-decoration: underline;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 0;
+  }
+  button.link-btn:hover { color: var(--text); }
+  .counter {
+    margin-top: 20px;
+    font-size: 18px;
+    color: var(--muted);
+  }
+  .counter strong {
+    color: var(--accent);
+    font-size: 22px;
+  }
+  button.reset {
+    margin-top: 12px;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+  }
+  button.reset:hover { border-color: var(--accent); color: var(--text); }
+  .notice {
+    margin-top: 20px;
+    padding: 12px 16px;
+    border-radius: 8px;
+    font-size: 16px;
+    min-height: 24px;
+    transition: opacity 0.2s;
+  }
+  .notice.success { background: rgba(33, 201, 143, 0.15); color: var(--accent); }
+  .notice.error { background: rgba(229, 98, 106, 0.15); color: var(--danger); }
+  .notice.hidden { opacity: 0; }
+</style>
+</head>
+<body>
+  <h1>LONG TEST<br>QR Scan Queue</h1>
+
+  <div class="card hidden" id="login-card">
+    <div class="login-field">
+      <label for="login-username">Username</label>
+      <input id="login-username" type="text" autocomplete="username">
+    </div>
+    <div class="login-field">
+      <label for="login-password">Password</label>
+      <input id="login-password" type="password" autocomplete="current-password">
+    </div>
+    <button class="btn-primary" id="login-btn" type="button">Log In</button>
+    <div class="notice hidden" id="login-notice"></div>
+  </div>
+
+  <div class="card hidden" id="scan-card">
+    <div class="session-bar">
+      Signed in as <strong id="session-user"></strong>
+      <button class="link-btn" id="logout-btn" type="button">Log out</button>
+    </div>
+    <input id="qr-input" type="text" placeholder="Scan or type QR code, then Enter" autocomplete="off">
+    <div class="notice hidden" id="notice"></div>
+    <div class="counter">Scanned this session: <strong id="counter">0</strong></div>
+    <button class="reset" id="reset-btn" type="button">Reset counter</button>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
+    import {
+      getFirestore, doc, setDoc, serverTimestamp,
+    } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+    import {
+      getAuth, signInWithCustomToken, onAuthStateChanged, signOut,
+    } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
+    import {
+      getFunctions, httpsCallable,
+    } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-functions.js";
+
+    // This project's real web app config (registered via
+    // `firebase apps:create WEB` / `firebase apps:sdkconfig WEB`). Not a
+    // secret - meant to be public/client-embedded; access is controlled by
+    // Firestore Security Rules (firestore.rules), not by hiding this config.
+    const firebaseConfig = {
+      apiKey: "AIzaSyA6xtcJLe0FWm7ichql6uyktXm3k1C34oI",
+      authDomain: "drd-buffer-tracking-c5a02.firebaseapp.com",
+      projectId: "drd-buffer-tracking-c5a02",
+      storageBucket: "drd-buffer-tracking-c5a02.firebasestorage.app",
+      messagingSenderId: "17926416666",
+      appId: "1:17926416666:web:feb33acfa8381c38fb64a3",
+    };
+
+    const DEPARTMENT = "long-test";
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    const auth = getAuth(app);
+    // Must match the region queueLogin is deployed with (see functions/index.js).
+    const functions = getFunctions(app, "asia-east2");
+    const queueLogin = httpsCallable(functions, "queueLogin");
+
+    const loginCard = document.getElementById("login-card");
+    const scanCard = document.getElementById("scan-card");
+    const usernameInput = document.getElementById("login-username");
+    const passwordInput = document.getElementById("login-password");
+    const loginBtn = document.getElementById("login-btn");
+    const loginNoticeEl = document.getElementById("login-notice");
+    const sessionUserEl = document.getElementById("session-user");
+    const logoutBtn = document.getElementById("logout-btn");
+
+    const input = document.getElementById("qr-input");
+    const counterEl = document.getElementById("counter");
+    const noticeEl = document.getElementById("notice");
+    const resetBtn = document.getElementById("reset-btn");
+
+    let count = 0;
+    let noticeTimer = null;
+    let loginNoticeTimer = null;
+
+    function showNotice(message, kind) {
+      noticeEl.textContent = message;
+      noticeEl.className = `notice ${kind}`;
+      clearTimeout(noticeTimer);
+      noticeTimer = setTimeout(() => {
+        noticeEl.className = "notice hidden";
+      }, 2500);
+    }
+
+    function showLoginNotice(message) {
+      loginNoticeEl.textContent = message;
+      loginNoticeEl.className = "notice error";
+      clearTimeout(loginNoticeTimer);
+      loginNoticeTimer = setTimeout(() => {
+        loginNoticeEl.className = "notice hidden";
+      }, 4000);
+    }
+
+    // Deterministic doc ID (department + QR) is what makes a duplicate scan
+    // fail at the database level (see firestore.rules) instead of needing a
+    // separate read to check first - Firestore chars not allowed in an ID
+    // are swapped out defensively, though these QR codes are plain alphanumerics.
+    function docIdFor(department, qr) {
+      const safeQr = qr.replace(/[\/.]/g, "_").slice(0, 400);
+      return `${department}__${safeQr}`;
+    }
+
+    async function submitScan() {
+      const qr = input.value.trim();
+      input.value = "";
+      if (!qr || !auth.currentUser) return;
+
+      const id = docIdFor(DEPARTMENT, qr);
+      try {
+        await setDoc(doc(db, "io_queue", id), {
+          qr,
+          department: DEPARTMENT,
+          scanned_by: auth.currentUser.uid,
+          scanned_at: serverTimestamp(),
+        });
+        count += 1;
+        counterEl.textContent = String(count);
+        showNotice(`Scanned: ${qr}`, "success");
+      } catch (err) {
+        // Security rules deny overwriting an existing document, so a
+        // duplicate scan (same department + QR) surfaces here as a
+        // permission-denied error - anything else is a genuine problem.
+        // A department mismatch (wrong account for this page) also comes
+        // back as permission-denied, since firestore.rules checks the
+        // signed-in account's own department claim on every write.
+        if (err.code === "permission-denied") {
+          showNotice(`Already scanned, or account not allowed here: ${qr}`, "error");
+        } else {
+          showNotice(`Error - please try again (${err.code || err.message})`, "error");
+        }
+      } finally {
+        input.focus();
+      }
+    }
+
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        submitScan();
+      }
+    });
+
+    resetBtn.addEventListener("click", () => {
+      count = 0;
+      counterEl.textContent = "0";
+    });
+
+    async function doLogin() {
+      const username = usernameInput.value.trim();
+      const password = passwordInput.value;
+      if (!username || !password) {
+        showLoginNotice("Enter both a username and password.");
+        return;
+      }
+      loginBtn.disabled = true;
+      try {
+        const result = await queueLogin({ username, password });
+        await signInWithCustomToken(auth, result.data.token);
+        passwordInput.value = "";
+      } catch (err) {
+        showLoginNotice(err.message || "Login failed - please try again.");
+      } finally {
+        loginBtn.disabled = false;
+      }
+    }
+
+    loginBtn.addEventListener("click", doLogin);
+    passwordInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        doLogin();
+      }
+    });
+
+    logoutBtn.addEventListener("click", () => signOut(auth));
+
+    onAuthStateChanged(auth, (user) => {
+      if (user) {
+        loginCard.classList.add("hidden");
+        scanCard.classList.remove("hidden");
+        sessionUserEl.textContent = user.uid;
+        input.focus();
+      } else {
+        scanCard.classList.add("hidden");
+        loginCard.classList.remove("hidden");
+        usernameInput.focus();
+      }
+    });
+  </script>
+</body>
+</html>

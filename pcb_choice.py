@@ -1,11 +1,11 @@
-import gspread
+from gsheets_cache import call_with_retry, get_spreadsheet
 
 _TAB_NAME = "Buffer file - PCB choice"
 
 
-def _connect(key_path, sheet_id):
-    client = gspread.service_account(filename=str(key_path))
-    return client.open_by_key(sheet_id)
+def _fetch_rows(key_path, sheet_id):
+    worksheet = get_spreadsheet(key_path, sheet_id).worksheet(_TAB_NAME)
+    return worksheet.get_all_values()
 
 
 def load_pcb_choice_rules(key_path, sheet_id):
@@ -17,8 +17,7 @@ def load_pcb_choice_rules(key_path, sheet_id):
     returns; `regions` is the set of region codes the row applies to, or
     None if it applies to every region (blank Region column).
     """
-    worksheet = _connect(key_path, sheet_id).worksheet(_TAB_NAME)
-    rows = worksheet.get_all_values()[1:]  # skip header row
+    rows = call_with_retry(_fetch_rows, key_path, sheet_id)[1:]  # skip header row
     rules = []
     for row in rows:
         search_text, region_cell, option = (row + ["", "", ""])[:3]

@@ -1,0 +1,78 @@
+rules_version = '2';
+
+// This project's Python desktop app talks to Firestore exclusively via the
+// Admin SDK (firebase_key.json), which always bypasses these rules
+// entirely - everything below only governs the public department scan
+// pages, which use the restricted client-side Firebase SDK instead.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Department QR-scan queue. Each scan page requires a login (see
+    // functions/index.js's queueLogin, which mints a custom-token session
+    // with a `department` claim for a queue_accounts entry) before it'll
+    // let a scan through, so this is the only thing an authenticated
+    // public client can touch, and only in this one narrow way:
+    //   - create a new document (one scan) - allowed, with its shape
+    //     validated, only for a signed-in queue account, only into its OWN
+    //     department (so a QC-only account's token can never write
+    //     department: "assembly", even if someone opens the wrong page or
+    //     tampers with the client JS), and only attributed to itself
+    //     (scanned_by must be its own uid, never someone else's name).
+    //   - overwrite an EXISTING document - denied, which is what makes a
+    //     duplicate scan (same department + QR -> same deterministic doc
+    //     ID) fail instead of silently overwriting; the page treats that
+    //     failure as "already scanned" and shows the notification.
+    //   - read, update, or delete - never allowed from a public client;
+    //     only the Admin SDK (Python app, Cloud Function) can do those.
+    match /io_queue/{docId} {
+      allow create: if request.auth != null
+                    && request.resource.data.keys().hasOnly(['qr', 'department', 'scanned_at', 'scanned_by'])
+                    && request.resource.data.qr is string
+                    && request.resource.data.qr.size() > 0
+                    && request.resource.data.qr.size() < 500
+                    && request.resource.data.department in
+                       ['hard-test', 'assembly', 'long-test', 'test-room', 'qc']
+                    && request.resource.data.department == request.auth.token.department
+                    && request.resource.data.scanned_by == request.auth.uid
+                    && request.resource.data.scanned_at == request.time;
+      allow read, update, delete: if false;
+    }
+
+    // Assembly Inline Rework Tool - a separate product sharing this
+    // project's infrastructure, not part of the queue-scan system above.
+    // Its own login (functions/index.js's airLogin) mints a custom token
+    // with a `role` claim ("admin"/"user") instead of `department` - that
+    // claim-shape difference is what keeps a queue-page token and an AIR
+    // token from ever being usable against each other's collection, even
+    // though both live in the same Firebase project.
+    //   - create: any signed-in AIR account (admin or user) may log a new
+    //     record, only attributed to itself (username must be its own uid).
+    //   - read (get/list): any signed-in AIR account, admin or user - the
+    //     Search feature needs this so the client can query directly
+    //     without a Cloud Function round-trip per search.
+    //   - update, delete: never - append-only history, same as io_queue.
+    match /air_records/{docId} {
+      allow create: if request.auth != null
+                    && 'role' in request.auth.token
+                    && request.resource.data.keys().hasOnly(['qr', 'defect', 'action', 'username', 'created_at'])
+                    && request.resource.data.qr is string
+                    && request.resource.data.qr.size() > 0
+                    && request.resource.data.qr.size() < 500
+                    && request.resource.data.defect is string
+                    && request.resource.data.defect.size() > 0
+                    && request.resource.data.action is string
+                    && request.resource.data.action.size() > 0
+                    && request.resource.data.username == request.auth.uid
+                    && request.resource.data.created_at == request.time;
+      allow read: if request.auth != null && 'role' in request.auth.token;
+      allow update, delete: if false;
+    }
+
+    // Deny everything else by default - Firestore already denies anything
+    // not explicitly matched above, this just makes that intent explicit
+    // so a future rule added elsewhere can't accidentally widen access here.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

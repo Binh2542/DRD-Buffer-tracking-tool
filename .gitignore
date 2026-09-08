@@ -14,4 +14,31 @@ __pycache__/
 /session.json
 /device_list.json
 /.chromedriver_path
+/.serial_port
+/.pcb_choice_cache.json
+/.device_choice_cache.json
+/.operator_names_cache.json
 /firebase_key.json
+
+# PyInstaller build output - rebuild locally with: pyinstaller build.spec
+/build/
+/dist/
+
+# ./build_linux.sh output (contains a copy of the secrets above, if present)
+/dist-package/
+/dist-package.tar.gz
+/build.log
+
+# Firebase Hosting/Functions deployment artifacts
+/.firebase/
+firebase-debug.log
+firestore-debug.log
+functions/node_modules/
+functions/.env
+functions/.env.*
+# functions/*.js (index.js, archive.js) hold hardcoded admin/manual-trigger
+# secrets (see their own comments) - deployed straight from this machine
+# with `firebase deploy`, deliberately never committed since this repo is
+# public. Keep this ignored rather than relying on nobody ever running a
+# plain `git add .` in functions/.
+functions/*.js
