@@ -118,7 +118,7 @@ def _parse_version(v: str):
     return tuple(parts)
 
 
-def check_for_update(current_version: str, repo: str):
+def check_for_update(current_version: str, repo: str, allow_prerelease: bool = False):
     """Best-effort - returns None on ANY failure (network down, GitHub
     unreachable, no releases published yet, malformed response, etc.), so
     a caller can always treat this as "no update available right now"
@@ -129,9 +129,20 @@ def check_for_update(current_version: str, repo: str):
     every release (newest tag first) rather than trusting GitHub's own
     "latest" pointer - see the module docstring and this file's comment
     on _API_URL for why: that pointer is repo-wide, not per-platform.
+
+    allow_prerelease=False (the default, and what every machine other
+    than a developer's own test one should ever pass) skips releases
+    published as a GitHub "pre-release" entirely - this is the test-
+    before-rollout mechanism: publish a build as a pre-release, and it's
+    invisible to every real machine until it's confirmed good and
+    promoted (flip the pre-release flag off, no rebuild needed) - only a
+    machine that's deliberately opted in via the local .test_channel
+    marker (see app_gui.py) ever sees it early, exactly like the incident
+    this exists to prevent: a broken Linux build reached every machine at
+    once with no way to have caught it on just one first.
     """
     try:
-        _debug_log(f"check_for_update: current={current_version!r} repo={repo!r}")
+        _debug_log(f"check_for_update: current={current_version!r} repo={repo!r} allow_prerelease={allow_prerelease}")
         response = requests.get(_API_URL.format(repo=repo), timeout=_REQUEST_TIMEOUT)
         response.raise_for_status()
         releases = response.json()
@@ -139,6 +150,8 @@ def check_for_update(current_version: str, repo: str):
         current = _parse_version(current_version)
         best = None  # (version_tuple, remote_version_str, asset, assets) of the best match so far
         for release in releases:
+            if release.get("prerelease") and not allow_prerelease:
+                continue
             remote_version = release.get("tag_name") or ""
             if not remote_version:
                 continue

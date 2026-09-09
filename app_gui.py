@@ -914,7 +914,18 @@ class WebdbApp:
 
     # ---------------- mandatory update ----------------
     def _check_for_update_async(self):
-        update_info = check_for_update(APP_VERSION, UPDATE_REPO)
+        # A ".test_channel" file sitting next to the exe (BASE_DIR, not
+        # bundled - create it by hand only on a machine deliberately being
+        # used to test an unreleased build) opts that ONE machine into
+        # seeing GitHub pre-releases early - every other machine only ever
+        # sees a release once it's promoted out of pre-release, no rebuild
+        # needed for that. This is the test-before-rollout path: publish a
+        # new build as a pre-release, confirm it on this one machine
+        # first, then promote it - instead of every machine finding out
+        # about a bad build at the same time (see this module's docstring
+        # in auto_update.py for the incident this is meant to prevent).
+        allow_prerelease = (BASE_DIR / ".test_channel").exists()
+        update_info = check_for_update(APP_VERSION, UPDATE_REPO, allow_prerelease=allow_prerelease)
         if update_info:
             self.root.after(0, lambda: self._show_mandatory_update_dialog(update_info))
 
