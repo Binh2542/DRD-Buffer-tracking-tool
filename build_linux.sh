@@ -54,7 +54,12 @@ set +u
 source .venv/bin/activate
 set -u
 pip install --upgrade pip
-pip install -r requirements.txt -r requirements-build.txt
+# requirements-linux.txt, not requirements.txt - matplotlib's compiled
+# dependencies (numpy/contourpy/pillow) don't all publish wheels spanning
+# both this project's Windows build machine's Python and an older
+# Ubuntu's Python at once, so Linux gets its own otherwise-identical pin
+# for just those - see requirements.txt's own comment for the full story.
+pip install -r requirements-linux.txt -r requirements-build.txt
 
 echo "==> Building with PyInstaller"
 pyinstaller build.spec --noconfirm

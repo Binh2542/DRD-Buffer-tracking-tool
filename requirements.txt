@@ -1,14 +1,25 @@
 # Every direct AND transitive dependency is pinned exactly here (not just
-# the handful this project imports directly) - build_linux.sh recreates
-# the venv from scratch on every build, and matplotlib/selenium/
+# the handful this project imports directly) - a plain venv recreated from
+# scratch (see build.spec/build_linux.sh) lets matplotlib/selenium/
 # firebase-admin's own transitive dependency ranges drift over time (a
 # clean install run today can pull noticeably different numpy/matplotlib
 # versions than one run last week). That drift is the reason PyInstaller
 # builds a few days apart came out wildly different sizes (42MB/68MB/31MB
 # for the exact same source code) and, at least once, produced a Linux
-# build that would not start at all - pinning everything makes every
-# future build reproduce the exact dependency set already verified
-# working, on Windows and Linux alike.
+# build that would not start at all.
+#
+# This file is pinned against the Python version this project's Windows
+# build machine actually has (very new - see below); requirements-
+# linux.txt is a SEPARATE, otherwise-identical pin for whatever Python
+# version the target Linux build machine has, because matplotlib's own
+# compiled dependencies (numpy, contourpy, pillow) don't all publish
+# wheels spanning that wide a Python-version range at once - a version
+# new enough to have a wheel for this machine's Python is often too new
+# to have ever supported an older Ubuntu's Python, and vice versa. Update
+# BOTH files together when bumping one of these four; run
+# check_linux_requirements.sh (or the same idea by hand) against whatever
+# Python the Linux build machine has before assuming a version pinned
+# here also has a Linux wheel for it.
 anyio==4.14.2
 attrs==26.1.0
 CacheControl==0.14.4
