@@ -1,1 +1,11 @@
-pyinstaller>=6.0
+# Pinned for the same reproducibility reason as requirements.txt (see its
+# own comment) - altgraph/pefile/pywin32-ctypes are PyInstaller's own
+# dependencies, pulled in transitively; pefile and pywin32-ctypes are
+# Windows-only (PyInstaller uses them for .exe manipulation) and simply
+# don't exist for Linux, hence the markers rather than always installing
+# them.
+pyinstaller==6.21.0
+pyinstaller-hooks-contrib==2026.6
+altgraph==0.17.5
+pefile==2024.8.26; sys_platform == "win32"
+pywin32-ctypes==0.2.3; sys_platform == "win32"
