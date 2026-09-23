@@ -176,7 +176,7 @@ chmod +x "$PACKAGE_DIR/run.sh"
 # public build, so bundling them here (never committed to git - both are
 # in .gitignore) saves that person a manual copy step. Left out entirely,
 # with a note, if they're not present.
-for secret_file in firebase_key.json .env; do
+for secret_file in firebase_key.json .env sheets_oauth_client.json sheets_oauth_token.json; do
     if [ -f "$secret_file" ]; then
         cp "$secret_file" "$PACKAGE_DIR/"
         echo "==> Included $secret_file in the package"

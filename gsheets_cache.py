@@ -1,11 +1,25 @@
 import threading
 import time
+from pathlib import Path
 
 import gspread
 
 _client = None
 _spreadsheets = {}
 _lock = threading.Lock()
+
+# Sheets writes moved off the Firebase service account onto a real Google
+# account (OAuth) after the company blocked that service account from
+# writing to Sheets org-wide - see sheets_oauth_client.json/
+# sheets_oauth_token.json, produced by the one-time oauth_login_once.py
+# setup script. Firestore auth is untouched (still the service account in
+# firebase_key.json) since only Sheets access was blocked, not Firestore.
+#
+# Both files live next to firebase_key.json (i.e. next to the exe itself,
+# app_gui.py's BASE_DIR) - NOT next to this module's own __file__, which
+# in a frozen PyInstaller build resolves inside the temp extraction
+# directory (_MEIPASS), not next to the actual exe. key_path (still passed
+# in by every caller for this exact reason) is what locates that directory.
 
 
 def get_spreadsheet(key_path, sheet_id):
@@ -24,7 +38,18 @@ def get_spreadsheet(key_path, sheet_id):
     global _client
     with _lock:
         if _client is None:
-            _client = gspread.service_account(filename=str(key_path))
+            base_dir = Path(key_path).resolve().parent
+            _client = gspread.oauth(
+                credentials_filename=str(base_dir / "sheets_oauth_client.json"),
+                authorized_user_filename=str(base_dir / "sheets_oauth_token.json"),
+                # Sheets-only, deliberately excluding the Drive scope -
+                # this app only ever calls open_by_key()+reads/writes cells,
+                # never anything Drive-specific, and the full Drive scope
+                # is on Google's Restricted list, which blocks publishing
+                # this OAuth app to production without a verification
+                # review. Sheets-only avoids that entirely.
+                scopes=("https://www.googleapis.com/auth/spreadsheets",),
+            )
         if sheet_id not in _spreadsheets:
             _spreadsheets[sheet_id] = _client.open_by_key(sheet_id)
         return _spreadsheets[sheet_id]

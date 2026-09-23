@@ -19,6 +19,8 @@ __pycache__/
 /.device_choice_cache.json
 /.operator_names_cache.json
 /firebase_key.json
+/sheets_oauth_client.json
+/sheets_oauth_token.json
 
 # PyInstaller build output - rebuild locally with: pyinstaller build.spec
 /build/
