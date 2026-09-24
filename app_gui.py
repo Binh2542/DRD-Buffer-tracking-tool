@@ -226,7 +226,7 @@ def _pcb_choice_rules_to_jsonable(rules):
 # hand whenever a build is cut, since PyInstaller doesn't derive one on
 # its own. Cross-platform: Tkinter's title bar is the same call on every
 # OS this ships on.
-APP_VERSION = "V1.4.1"
+APP_VERSION = "V1.4.2"
 # Checked at every startup (see WebdbApp.__init__/_check_for_update_async) -
 # a public repo so this needs no embedded token (see auto_update.py's
 # docstring for the release/asset naming convention this expects).
@@ -2483,13 +2483,17 @@ class WebdbApp:
             # because this QR was scanned once before - only treat it as
             # an accidental duplicate scan (select/flash the existing row
             # instead of logging a new one) if the most recent entry for
-            # this QR is within the last 24h; older than that, log it as
-            # a new repair like any other scan.
+            # this QR is within the dedup window; older than that, log it
+            # as a new repair like any other scan. Assembly Rework's line
+            # cycles units back through faster than Debug's, so a real
+            # repeat repair there can legitimately happen within 24h -
+            # narrower window keeps that from being swallowed as a dupe.
+            dedup_hours = 12 if self.app_mode == "assembly_rework" else 24
             matches = [r for r in self.online_repairs if r["qr"] == qr]
             latest = max(matches, key=lambda r: r.get("repair_time_iso") or "", default=None)
             latest_time = _parse_iso_to_gmt7(latest["repair_time_iso"]) if latest else None
             if latest_time is not None and (
-                dt.datetime.now(dt.timezone.utc).astimezone(GMT7) - latest_time < dt.timedelta(hours=24)
+                dt.datetime.now(dt.timezone.utc).astimezone(GMT7) - latest_time < dt.timedelta(hours=dedup_hours)
             ):
                 self.tree.selection_set(latest["_doc_id"])
                 self.tree.see(latest["_doc_id"])
