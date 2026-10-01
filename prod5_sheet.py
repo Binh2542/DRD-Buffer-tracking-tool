@@ -4,9 +4,16 @@ import time
 
 from gsheets_cache import get_spreadsheet
 
-_FROM_TAB_NAME = "FROM"
-_FACT_OK_TAB_NAME = "Fact-D&R_ok"
-_FACT_DR_TAB_NAME = "Fact-D&R"
+# These used to be separate tabs in their own dedicated "Buffer Debug/
+# Assembly REWORK PROD5 VTP" spreadsheets, written to via a service
+# account - moved into this same "DRD buffer tracking" spreadsheet (the
+# one GOOGLE_SHEET_ID/the OAuth identity already manages) as plain tabs
+# once the company blocked bot/tool access to those two separate files.
+# Only the destination changed - column layout, merge behaviour and
+# everything else in this module is untouched.
+_FROM_TAB_NAME = "Debug_From"
+_FACT_OK_TAB_NAME = "Debug_D&R_Ok"
+_FACT_DR_TAB_NAME = "Debug_Fact_D&R"
 _GMT7 = dt.timezone(dt.timedelta(hours=7))
 
 
@@ -63,20 +70,18 @@ _lock = threading.Lock()
 
 
 def init_from_sheet(key_path, sheet_id):
-    """Connect to the "FROM" tab of the "Buffer Debug PROD5 VTP" spreadsheet."""
+    """Connect to the "Debug_From" tab (see this module's docstring)."""
     return get_spreadsheet(key_path, sheet_id).worksheet(_FROM_TAB_NAME)
 
 
 def init_fact_ok_sheet(key_path, sheet_id):
-    """Connect to the "Fact-D&R_ok" tab of the "Buffer Debug PROD5 VTP" spreadsheet."""
+    """Connect to the "Debug_D&R_Ok" tab (see this module's docstring)."""
     return get_spreadsheet(key_path, sheet_id).worksheet(_FACT_OK_TAB_NAME)
 
 
 def init_fact_dr_sheet(key_path, sheet_id):
-    """Connect to the "Fact-D&R" tab of the "Buffer Debug PROD5 VTP"
-    spreadsheet. Unlike the other tabs here, this one already has 1500+
-    rows of ongoing data from an unrelated factory workflow (Line/Assembly
-    output tracking) - so it's never auto-created, only ever connected to."""
+    """Connect to the "Debug_Fact_D&R" tab (see this module's docstring).
+    Never auto-created, only ever connected to."""
     return get_spreadsheet(key_path, sheet_id).worksheet(_FACT_DR_TAB_NAME)
 
 
@@ -330,20 +335,19 @@ def undo_line_activity(
         return False
 
 
-# ---- Assembly Rework's own PROD5-style spreadsheet ("Buffer Assembly
-# REWORK PROD5 VTP") - a different, larger workbook with its own column
-# layout (Board/BoardColour don't line up 1:1 with Debug's sheet: Board
-# text already includes colour/region so BoardColour is always left blank
-# here, and the trailing columns are Subtype/Number of tasks/Remarks/Etap
-# instead of Debug's). Kept separate from _record_row above rather than
-# forcing it into that shape.
-_AR_FROM_TAB_NAME = "FROM"
+# ---- Assembly Rework's own tabs, also now in "DRD buffer tracking" (see
+# this module's docstring) - a different column layout from Debug's
+# (Board/BoardColour don't line up 1:1: Board text already includes
+# colour/region so BoardColour is always left blank here, and the
+# trailing columns are Subtype/Number of tasks/Remarks/Etap instead of
+# Debug's). Kept separate from _record_row above rather than forcing it
+# into that shape.
+_AR_FROM_TAB_NAME = "AR_FROM"
 
 
 def init_ar_prod5_from_sheet(key_path, sheet_id):
-    """Connect to the "FROM" tab of the "Buffer Assembly REWORK PROD5 VTP"
-    spreadsheet. Like Debug's Fact-D&R, this already has hundreds of rows
-    of ongoing data - never auto-created, only ever connected to."""
+    """Connect to the "AR_FROM" tab (see this module's docstring). Never
+    auto-created, only ever connected to."""
     return get_spreadsheet(key_path, sheet_id).worksheet(_AR_FROM_TAB_NAME)
 
 
@@ -411,12 +415,12 @@ def undo_ar_buffer_scan(
         return False
 
 
-_AR_FACT_REWORK_TAB_NAME = "Fact-Rework"
+_AR_FACT_REWORK_TAB_NAME = "AR_Fact_Rework"
 
 
 def init_ar_fact_rework_sheet(key_path, sheet_id):
-    """Connect to the "Fact-Rework" tab of the "Buffer Assembly REWORK
-    PROD5 VTP" spreadsheet. Never auto-created, only ever connected to."""
+    """Connect to the "AR_Fact_Rework" tab (see this module's docstring).
+    Never auto-created, only ever connected to."""
     return get_spreadsheet(key_path, sheet_id).worksheet(_AR_FACT_REWORK_TAB_NAME)
 
 

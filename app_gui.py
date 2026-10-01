@@ -228,8 +228,6 @@ APP_VERSION = "V1.4.3"
 UPDATE_REPO = "Binh2542/DRD-Buffer-tracking-tool"
 BASE_URL = "https://main.prod.m11g.ajax.systems/webaut/webdb/"
 GOOGLE_SHEET_ID = os.environ.get("GOOGLE_SHEET_ID", "").strip()
-PROD5_SHEET_ID = "1otPfRvWa2zGREGLi_5SzsOi8DyPZyeo24cVwS5bNTos"  # "Buffer Debug PROD5 VTP"
-AR_PROD5_SHEET_ID = "1wr7UhVUlMl7_QfXik3nxDw4dMY56kKV1otf3BhU62rk"  # "Buffer Assembly REWORK PROD5 VTP"
 
 # The app always connects to the real WebDB site with this one shared
 # account, regardless of which app-level account the operator logs in
@@ -1140,14 +1138,21 @@ class WebdbApp:
                 executor.submit(load_operator_names, FIREBASE_KEY_FILE, GOOGLE_SHEET_ID)
                 if GOOGLE_SHEET_ID else None
             )
-            from_sheet_future = executor.submit(init_from_sheet, FIREBASE_KEY_FILE, PROD5_SHEET_ID)
-            fact_ok_sheet_future = executor.submit(init_fact_ok_sheet, FIREBASE_KEY_FILE, PROD5_SHEET_ID)
-            fact_dr_sheet_future = executor.submit(init_fact_dr_sheet, FIREBASE_KEY_FILE, PROD5_SHEET_ID)
+            # These 5 used to point at PROD5_SHEET_ID/AR_PROD5_SHEET_ID (two
+            # separate spreadsheets) - moved to GOOGLE_SHEET_ID (tabs
+            # Debug_From/Debug_Fact_D&R/Debug_D&R_Ok/AR_FROM/AR_Fact_Rework
+            # inside "DRD buffer tracking") once the company blocked bot/
+            # tool access to those two files - see prod5_sheet.py's own
+            # comment for the full story. Column layout and merge
+            # behaviour are unchanged, only the destination spreadsheet.
+            from_sheet_future = executor.submit(init_from_sheet, FIREBASE_KEY_FILE, GOOGLE_SHEET_ID)
+            fact_ok_sheet_future = executor.submit(init_fact_ok_sheet, FIREBASE_KEY_FILE, GOOGLE_SHEET_ID)
+            fact_dr_sheet_future = executor.submit(init_fact_dr_sheet, FIREBASE_KEY_FILE, GOOGLE_SHEET_ID)
             ar_prod5_from_sheet_future = executor.submit(
-                init_ar_prod5_from_sheet, FIREBASE_KEY_FILE, AR_PROD5_SHEET_ID
+                init_ar_prod5_from_sheet, FIREBASE_KEY_FILE, GOOGLE_SHEET_ID
             )
             ar_fact_rework_sheet_future = executor.submit(
-                init_ar_fact_rework_sheet, FIREBASE_KEY_FILE, AR_PROD5_SHEET_ID
+                init_ar_fact_rework_sheet, FIREBASE_KEY_FILE, GOOGLE_SHEET_ID
             )
             device_choice_rules_future = (
                 executor.submit(load_device_choice_rules, FIREBASE_KEY_FILE, GOOGLE_SHEET_ID)
