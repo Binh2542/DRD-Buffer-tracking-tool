@@ -174,7 +174,7 @@ def _record_row(
 
     with _lock:
         all_values = worksheet.get_all_values()
-        for row_index in range(len(all_values), 1, -1):  # 1-based rows, skip header
+        for row_index in range(_last_real_row(all_values), 1, -1):  # 1-based rows, skip header
             row = all_values[row_index - 1]
             row_period, row_shift, _label, row_operator, row_board, row_colour, row_qty = (
                 row + [""] * 7
@@ -196,7 +196,7 @@ def _record_row(
             [period, shift, label_column_value, operator, board, board_colour, "1", *trailing_values],
             value_input_option="USER_ENTERED",
         ))
-        new_row_index = len(all_values) + 1
+        new_row_index = _last_real_row(all_values) + 1
         if new_row_index > 2:  # a real data row exists above to copy validation/format from
             _copy_validation_and_format(worksheet, source_row=new_row_index - 1, dest_row=new_row_index)
 
@@ -288,7 +288,7 @@ def undo_from_scan(worksheet, board: str, color, expected_period: str, expected_
     board_colour = board_colour_for(color)
     with _lock:
         all_values = worksheet.get_all_values()
-        for row_index in range(len(all_values), 1, -1):  # 1-based rows, skip header
+        for row_index in range(_last_real_row(all_values), 1, -1):  # 1-based rows, skip header
             row = all_values[row_index - 1]
             row_period, row_shift, row_label, row_operator, row_board, row_colour, _qty = (
                 row + [""] * 7
@@ -314,7 +314,7 @@ def undo_line_activity(
     board_colour = board_colour_for(color)
     with _lock:
         all_values = worksheet.get_all_values()
-        for row_index in range(len(all_values), 1, -1):  # 1-based rows, skip header
+        for row_index in range(_last_real_row(all_values), 1, -1):  # 1-based rows, skip header
             row = all_values[row_index - 1]
             row_period, row_shift, row_label, row_operator, row_board, row_colour, _qty = (
                 row + [""] * 7
@@ -366,7 +366,7 @@ def record_ar_buffer_scan(worksheet, from_label: str, board_text: str) -> None:
 
     with _lock:
         all_values = worksheet.get_all_values()
-        for row_index in range(len(all_values), 1, -1):  # 1-based rows, skip header
+        for row_index in range(_last_real_row(all_values), 1, -1):  # 1-based rows, skip header
             row = all_values[row_index - 1]
             row_period, row_shift, row_from, _op, row_board, _colour, row_qty = (row + [""] * 7)[:7]
             if row_period != period:
@@ -383,7 +383,7 @@ def record_ar_buffer_scan(worksheet, from_label: str, board_text: str) -> None:
             [period, shift, from_label, "", board_text, "", "1", "", "", "", ""],
             value_input_option="USER_ENTERED",
         ))
-        new_row_index = len(all_values) + 1
+        new_row_index = _last_real_row(all_values) + 1
         if new_row_index > 2:  # a real data row exists above to copy validation/format from
             # A-E and K all carry dropdown validation on this sheet (unlike
             # Debug's FROM, where only A-G matter) - see _row_range's docstring.
@@ -400,7 +400,7 @@ def undo_ar_buffer_scan(
     rather than blanked in place."""
     with _lock:
         all_values = worksheet.get_all_values()
-        for row_index in range(len(all_values), 1, -1):  # 1-based rows, skip header
+        for row_index in range(_last_real_row(all_values), 1, -1):  # 1-based rows, skip header
             row = all_values[row_index - 1]
             row_period, row_shift, row_from, _op, row_board, _colour, _qty = (row + [""] * 7)[:7]
             if row_period != expected_period:
@@ -421,15 +421,20 @@ def init_ar_fact_rework_sheet(key_path, sheet_id):
 
 
 def _last_real_row(all_values) -> int:
-    """Fact-Rework has thousands of rows pre-formatted far past the real
-    data (a formula in a trailing column keeps them technically
-    "non-empty" even though columns A-H are blank), so get_all_values()'s
-    length can't be trusted as "where the real data ends" the way every
-    other sheet in this module can - naively appending past them would
-    silently bury the new row thousands of rows below where anyone would
-    ever look for it. This walks back from the end to find the last row
-    that actually has a Period (column A) filled in. Returns 1 (the
-    header row) if the sheet is otherwise empty."""
+    """Any sheet in this module can end up with rows pre-formatted (data
+    validation/dropdowns applied) far past the real data - those rows come
+    back from get_all_values() as non-empty-looking but with every column
+    actually blank. get_all_values()'s length can't be trusted as "where
+    the real data ends" when that's happened - found live on Assembly
+    Rework's FROM sheet (230 such trailing rows): every merge-lookup loop
+    that started at len(all_values) immediately broke on the first blank
+    trailing row (Period == "" never matches today's real period), so it
+    never reached the real matching row above and fell through to
+    append_row() every single time - silently defeating the
+    same-day+shift+type Qty-bump merge entirely, one new Qty=1 row per
+    scan instead of bumping an existing one. This walks back from the end
+    to find the last row that actually has a Period (column A) filled in.
+    Returns 1 (the header row) if the sheet is otherwise empty."""
     for i in range(len(all_values), 0, -1):
         if all_values[i - 1] and all_values[i - 1][0].strip():
             return i

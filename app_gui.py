@@ -89,11 +89,6 @@ from prod5_sheet import (
 from auto_update import apply_update_and_restart, check_for_update, download_asset
 from serial_scanner import SerialScanner, list_serial_ports
 from sheets_export import (
-    export_completed_devices,
-    export_devices,
-    export_mrb_devices,
-    export_online_repairs,
-    export_qr_changes,
     init_ar_completed_sheet,
     init_ar_mrb_sheet,
     init_ar_online_repair_sheet,
@@ -4597,41 +4592,40 @@ class WebdbApp:
         elif kind == "online_repairs_loaded":
             self._on_online_repairs_loaded(item[1])
         elif kind == "devices_snapshot":
+            # No Sheet mirror call here - each scan/removal already syncs
+            # its own one row to the sheet at the point of that action (see
+            # sync_device_upserted/sync_device_removed call sites). A full
+            # export_devices() used to also run here on EVERY snapshot from
+            # EVERY connected machine (any scan from any machine updates
+            # the whole collection, so this fired constantly) - a large
+            # clear()+rewrite-everything call, in a bare thread with no
+            # timeout or error handling, racing against every other
+            # connected machine's own copy of the same call. That's the
+            # live incident this was removed over: large rewrites timing
+            # out/failing silently (no toast, no Firestore log - nothing
+            # written here ever reached _write_prod5_row's error handling)
+            # while the small, already-sufficient per-row writes kept
+            # working fine. The one-row-at-a-time sync is both correct and
+            # far cheaper - this was pure redundant risk.
             self.debug_devices = item[1]
             if self.app_mode == "debug":
                 self.checked_qrs &= {d["qr"] for d in self.debug_devices}
                 self._on_snapshot_update()
-            if self.debug_sheet:
-                threading.Thread(
-                    target=export_devices, args=(self.debug_sheet, list(self.debug_devices)), daemon=True
-                ).start()
         elif kind == "ar_devices_snapshot":
             self.ar_devices = item[1]
             if self.app_mode == "assembly_rework":
                 self.checked_qrs &= {d["qr"] for d in self.ar_devices}
                 self._on_snapshot_update()
-            if self.ar_sheet:
-                threading.Thread(
-                    target=export_devices, args=(self.ar_sheet, list(self.ar_devices)), daemon=True
-                ).start()
         elif kind == "online_repair_snapshot":
             self.debug_online_repairs = item[1]
             if self.app_mode == "debug":
                 self.checked_online_repair_ids &= {d["_doc_id"] for d in self.debug_online_repairs}
                 self._on_snapshot_update()
-            if self.debug_online_repair_sheet:
-                threading.Thread(
-                    target=export_online_repairs, args=(self.debug_online_repair_sheet, item[1]), daemon=True
-                ).start()
         elif kind == "ar_online_repair_snapshot":
             self.ar_online_repairs = item[1]
             if self.app_mode == "assembly_rework":
                 self.checked_online_repair_ids &= {d["_doc_id"] for d in self.ar_online_repairs}
                 self._on_snapshot_update()
-            if self.ar_online_repair_sheet:
-                threading.Thread(
-                    target=export_online_repairs, args=(self.ar_online_repair_sheet, item[1]), daemon=True
-                ).start()
         elif kind == "io_queue_snapshot":
             # No Google Sheet mirror here (unlike devices/online_repairs) -
             # each department's own scan page already writes straight to
