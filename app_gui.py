@@ -2799,6 +2799,36 @@ class WebdbApp:
         }
         threading.Thread(target=log_lookup_failure, args=(self.db, record), daemon=True).start()
 
+    def _write_firestore_record(self, write_fn, args, qr: str, label: str) -> None:
+        """Run one Firestore scan-write (add_device/add_online_repair) on a
+        background thread with the same error-handling/logging/toast
+        coverage as _write_prod5_row, instead of the old bare
+        `threading.Thread(target=write_fn, ...).start()` - that version had
+        zero error handling at all, so a failed write here (unlike the
+        Sheet writes, which were already covered) vanished completely
+        silently: no toast, no log, nothing. Found live on 2026-10-02
+        during an AR_Buffer sheet-corruption investigation - that incident
+        turned out NOT to be caused by this gap (the Firestore writes had
+        all actually succeeded), but the gap itself was real and is closed
+        here regardless, since the next occurrence might not be so lucky."""
+
+        def _run():
+            try:
+                write_fn(*args)
+            except Exception as exc:  # noqa: BLE001 - must not crash the thread
+                failure = {
+                    "qr": qr,
+                    "username": self.username,
+                    "app_mode": self.app_mode,
+                    "sheet": f"{label} (Firestore)",
+                    "time": dt.datetime.now(dt.timezone.utc).isoformat(),
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+                threading.Thread(target=log_sheet_write_failure, args=(self.db, failure), daemon=True).start()
+                self.result_queue.put(("sheet_write_failed", {"qr": qr, "sheet": f"{label} (Firestore)"}))
+
+        threading.Thread(target=_run, daemon=True).start()
+
     def _write_prod5_row(self, write_fn, args, qr: str, sheet_label: str) -> None:
         """Run one PROD5 Google Sheet write (record_from_scan/record_mrb/
         record_line_activity/record_ar_buffer_scan/record_ar_fact_rework_event/
@@ -2940,9 +2970,7 @@ class WebdbApp:
             "defect": result["defect_description"] or "No info",
             "color": result.get("color"),
         }
-        threading.Thread(
-            target=add_device, args=(self.db, device, self._devices_collection), daemon=True
-        ).start()
+        self._write_firestore_record(add_device, (self.db, device, self._devices_collection), qr, "Buffer")
         if self.sheet:
             self._write_prod5_row(sync_device_upserted, (self.sheet, device), qr, "buffer")
         # Buffer has no permanent Firestore listener anymore (see
@@ -3003,9 +3031,7 @@ class WebdbApp:
             "import_time_iso": result.get("failed_step_time"),
             "defect": from_label,
         }
-        threading.Thread(
-            target=add_device, args=(self.db, device, self._devices_collection), daemon=True
-        ).start()
+        self._write_firestore_record(add_device, (self.db, device, self._devices_collection), qr, "Buffer")
         if self.sheet:
             self._write_prod5_row(sync_device_upserted, (self.sheet, device), qr, "buffer")
         # See _on_scan_result's matching comment - no permanent listener,
@@ -3121,9 +3147,9 @@ class WebdbApp:
             "defect": defect,
             "color": info.get("color"),
         }
-        threading.Thread(
-            target=add_online_repair, args=(self.db, record, self._online_repair_collection), daemon=True
-        ).start()
+        self._write_firestore_record(
+            add_online_repair, (self.db, record, self._online_repair_collection), qr, "Online Repair"
+        )
         online_repair_sheet = self.online_repair_sheet
         if online_repair_sheet:
             self._write_prod5_row(sync_online_repair_added, (online_repair_sheet, record), qr, "online_repair")
