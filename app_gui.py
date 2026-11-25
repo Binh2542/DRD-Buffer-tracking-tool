@@ -2829,6 +2829,27 @@ class WebdbApp:
 
         threading.Thread(target=_run, daemon=True).start()
 
+    def _log_sheet_unavailable(self, qr: str, sheet_label: str) -> None:
+        """Log + toast a write that was skipped entirely because the
+        target worksheet connection is None (e.g. it failed to connect at
+        login) - previously a silent no-op, indistinguishable from "wrote
+        fine". Found live 2026-11-25: Debug's FROM sheet silently missed
+        at least 2 separate days' worth of scans (21/11, 25/11) this way,
+        with zero trace until the Board/Google Sheet was checked by hand
+        against Firestore - the exact gap _write_prod5_row/
+        _write_firestore_record already closed for the write itself, but
+        a None connection never even reaches those."""
+        failure = {
+            "qr": qr,
+            "username": self.username,
+            "app_mode": self.app_mode,
+            "sheet": sheet_label,
+            "time": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "error": f"{sheet_label} sheet not connected (None) - write skipped entirely",
+        }
+        threading.Thread(target=log_sheet_write_failure, args=(self.db, failure), daemon=True).start()
+        self.result_queue.put(("sheet_write_failed", {"qr": qr, "sheet": sheet_label}))
+
     def _write_prod5_row(self, write_fn, args, qr: str, sheet_label: str) -> None:
         """Run one PROD5 Google Sheet write (record_from_scan/record_mrb/
         record_line_activity/record_ar_buffer_scan/record_ar_fact_rework_event/
@@ -2987,10 +3008,13 @@ class WebdbApp:
         # This FROM sheet is Debug's own PROD5 VTP spreadsheet (categorized
         # by PCB debug rules) - Assembly Rework writes to its own separate
         # sheet instead (see _on_ar_scan_result), never to this one.
-        if self.app_mode == "debug" and self.from_sheet and not should_skip_prod5_sheet(result.get("board_name")):
-            self._write_prod5_row(
-                record_from_scan, (self.from_sheet, device["board"], result.get("color")), qr, "FROM"
-            )
+        if self.app_mode == "debug" and not should_skip_prod5_sheet(result.get("board_name")):
+            if self.from_sheet:
+                self._write_prod5_row(
+                    record_from_scan, (self.from_sheet, device["board"], result.get("color")), qr, "FROM"
+                )
+            else:
+                self._log_sheet_unavailable(qr, "FROM")
 
     def _on_ar_scan_result(self, result):
         """Assembly Rework's buffer-income result handler - counterpart to
@@ -3057,6 +3081,8 @@ class WebdbApp:
                 self._write_prod5_row(
                     record_ar_buffer_scan, (self.ar_prod5_from_sheet, from_label, board_text), qr, "FROM"
                 )
+            else:
+                self._log_sheet_unavailable(qr, "FROM")
             if not in_queue:
                 self._show_toast(f"{qr}: not found in queue", kind="error")
 
@@ -3304,10 +3330,15 @@ class WebdbApp:
                         (self.ar_fact_rework_sheet, "MRB", "Repair from buffer", operator, record["board"]),
                         qr, "Fact-Rework",
                     )
-            elif self.fact_ok_sheet and not should_skip_prod5_sheet(info.get("board_name")):
-                self._write_prod5_row(
-                    record_mrb, (self.fact_ok_sheet, record["board"], info.get("color")), qr, "Fact-D&R_ok"
-                )
+                else:
+                    self._log_sheet_unavailable(qr, "Fact-Rework")
+            elif not should_skip_prod5_sheet(info.get("board_name")):
+                if self.fact_ok_sheet:
+                    self._write_prod5_row(
+                        record_mrb, (self.fact_ok_sheet, record["board"], info.get("color")), qr, "Fact-D&R_ok"
+                    )
+                else:
+                    self._log_sheet_unavailable(qr, "Fact-D&R_ok")
         if is_ar and not resolved_board:
             self._show_toast(
                 f"{qr}: sent to MRB, but no matching Device choice rule for "
@@ -3914,12 +3945,17 @@ class WebdbApp:
                         ),
                         qr, "Fact-Rework",
                     )
-            elif self.fact_ok_sheet and not should_skip_prod5_sheet(item.get("board_name")):
-                self._write_prod5_row(
-                    record_completed,
-                    (self.fact_ok_sheet, completed_device["board"], item.get("color")),
-                    qr, "Fact-D&R_ok",
-                )
+                else:
+                    self._log_sheet_unavailable(qr, "Fact-Rework")
+            elif not should_skip_prod5_sheet(item.get("board_name")):
+                if self.fact_ok_sheet:
+                    self._write_prod5_row(
+                        record_completed,
+                        (self.fact_ok_sheet, completed_device["board"], item.get("color")),
+                        qr, "Fact-D&R_ok",
+                    )
+                else:
+                    self._log_sheet_unavailable(qr, "Fact-D&R_ok")
             to_delete.append(qr)
             self.checked_qrs.discard(qr)
             completed_now.append(completed_device)
@@ -4015,12 +4051,17 @@ class WebdbApp:
                     ),
                     qr, "Fact-Rework",
                 )
-        elif self.fact_ok_sheet and not should_skip_prod5_sheet(original.get("board_name")):
-            self._write_prod5_row(
-                record_completed,
-                (self.fact_ok_sheet, completed_device["board"], original.get("color")),
-                qr, "Fact-D&R_ok",
-            )
+            else:
+                self._log_sheet_unavailable(qr, "Fact-Rework")
+        elif not should_skip_prod5_sheet(original.get("board_name")):
+            if self.fact_ok_sheet:
+                self._write_prod5_row(
+                    record_completed,
+                    (self.fact_ok_sheet, completed_device["board"], original.get("color")),
+                    qr, "Fact-D&R_ok",
+                )
+            else:
+                self._log_sheet_unavailable(qr, "Fact-D&R_ok")
 
         self.checked_qrs.discard(qr)
 

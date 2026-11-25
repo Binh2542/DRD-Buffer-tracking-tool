@@ -197,11 +197,22 @@ def _record_row(
                 _write_with_retry(lambda: worksheet.update_cell(row_index, 7, str(new_qty)))  # column G = Qty
                 return
 
-        _write_with_retry(lambda: worksheet.append_row(
-            [period, shift, label_column_value, operator, board, board_colour, "1", *trailing_values],
+        new_row_index = _last_real_row(all_values) + 1
+        row_values = [period, shift, label_column_value, operator, board, board_colour, "1", *trailing_values]
+        end_col = chr(ord("A") + len(row_values) - 1)
+        # Explicit range, not append_row() - append_row() asks Sheets to
+        # auto-detect where "the table" ends, and found live to
+        # occasionally decide that's many columns to the right of column
+        # A on this exact sheet (cause never conclusively identified) -
+        # every subsequent append then compounds the drift, landing one
+        # row lower and further right than the last, forever. _last_real_row
+        # already computed the one true answer two lines above; just
+        # write there directly instead of asking Sheets to guess again.
+        _write_with_retry(lambda: worksheet.update(
+            range_name=f"A{new_row_index}:{end_col}{new_row_index}",
+            values=[row_values],
             value_input_option="USER_ENTERED",
         ))
-        new_row_index = _last_real_row(all_values) + 1
         if new_row_index > 2:  # a real data row exists above to copy validation/format from
             _copy_validation_and_format(worksheet, source_row=new_row_index - 1, dest_row=new_row_index)
 
@@ -383,11 +394,19 @@ def record_ar_buffer_scan(worksheet, from_label: str, board_text: str) -> None:
                 _write_with_retry(lambda: worksheet.update_cell(row_index, 7, str(new_qty)))  # column G = Qty
                 return
 
-        _write_with_retry(lambda: worksheet.append_row(
-            [period, shift, from_label, "", board_text, "", "1", "", "", "", ""],
+        new_row_index = _last_real_row(all_values) + 1
+        row_values = [period, shift, from_label, "", board_text, "", "1", "", "", "", ""]
+        end_col = chr(ord("A") + len(row_values) - 1)
+        # Explicit range, not append_row() - see _record_row's matching
+        # comment for why (the exact failure mode this avoids was found
+        # live on this module's other sheets, not this one specifically,
+        # but the risk is identical: append_row()'s own table-end guess,
+        # not _last_real_row's already-correct answer one line above).
+        _write_with_retry(lambda: worksheet.update(
+            range_name=f"A{new_row_index}:{end_col}{new_row_index}",
+            values=[row_values],
             value_input_option="USER_ENTERED",
         ))
-        new_row_index = _last_real_row(all_values) + 1
         if new_row_index > 2:  # a real data row exists above to copy validation/format from
             # A-E and K all carry dropdown validation on this sheet (unlike
             # Debug's FROM, where only A-G matter) - see _row_range's docstring.
